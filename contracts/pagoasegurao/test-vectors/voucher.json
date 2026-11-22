@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "network": "Test SDF Network ; September 2015",
+  "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  "signer": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  "merchant": "GDQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ",
+  "amount": 10000000,
+  "nonce": 42,
+  "expiry": 1735689600,
+  "message_hex": "",
+  "signature_hex": "",
+  "expected_valid": true,
+  "note": "Vector de prueba compartido entre Rust (cargo test) y TypeScript (scripts/verify-vector.ts). Rellenar message_hex y signature_hex tras generar con la clave del signer."
+}
