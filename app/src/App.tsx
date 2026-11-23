@@ -1,26 +1,82 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import ClienteScreen from './screens/cliente';
 import ComercioScreen from './screens/comercio';
+import { Wifi, WifiOff, User, Store, Shield } from 'lucide-react';
+import './App.css';
 
 export default function App() {
   const [mode, setMode] = useState<'cliente' | 'comercio'>('cliente');
-  const online = typeof navigator !== 'undefined' ? navigator.onLine : true;
+  const [online, setOnline] = useState<boolean>(typeof navigator !== 'undefined' ? navigator.onLine : true);
+
+  useEffect(() => {
+    const handleOnline = () => setOnline(true);
+    const handleOffline = () => setOnline(false);
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
 
   return (
-    <div className="app">
-      <header className="bar">
-        <h1>PagoAsegurao</h1>
-        <div className="status">
-          {online ? 'En línea' : 'Sin conexión'} ·
-          {mode === 'cliente' ? 'Cliente' : 'Comercio'}
+    <div className="app-container">
+      {/* Top Bar */}
+      <header className="app-header">
+        <div className="brand-group">
+          <div className="brand-logo">
+            <Shield size={22} />
+          </div>
+          <div className="brand-titles">
+            <h1 className="brand-name">PagoAsegurao</h1>
+            <span className="brand-tagline">Tu pago, asegurao, con o sin señal</span>
+          </div>
         </div>
-        <div className="toggle" onClick={() => setMode((m) => (m === 'cliente' ? 'comercio' : 'cliente'))}>
-          Cambiar a {mode === 'cliente' ? 'comercio' : 'cliente'}
+
+        <div className={`connection-pill ${online ? 'online' : 'offline'}`}>
+          {online ? (
+            <>
+              <span className="pulse-dot"></span>
+              <Wifi size={14} /> En línea
+            </>
+          ) : (
+            <>
+              <WifiOff size={14} /> Sin conexión (Modo Avión)
+            </>
+          )}
         </div>
       </header>
-      <main>
+
+      {/* Role Navigation Tabs */}
+      <nav className="role-nav">
+        <button
+          className={`nav-btn ${mode === 'cliente' ? 'active' : ''}`}
+          onClick={() => setMode('cliente')}
+        >
+          <User size={18} />
+          <span>Cliente (Pagar)</span>
+        </button>
+
+        <button
+          className={`nav-btn ${mode === 'comercio' ? 'active' : ''}`}
+          onClick={() => setMode('comercio')}
+        >
+          <Store size={18} />
+          <span>Comercio (Cobrar)</span>
+        </button>
+      </nav>
+
+      {/* Main View */}
+      <main className="app-main">
         {mode === 'cliente' ? <ClienteScreen /> : <ComercioScreen />}
       </main>
+
+      {/* Footer */}
+      <footer className="app-footer">
+        <span>Stellar Testnet · Soroban Smart Contract</span>
+      </footer>
     </div>
   );
 }

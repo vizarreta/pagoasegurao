@@ -25,7 +25,12 @@ Cargo.lock
 Thumbs.db
 
 # Deployments (public IDs only, regenerated)
-deployments/*.json
+# deployments/*.json
+!deployments/testnet.json
+
+# Test Snapshots
+test_snapshots/
+**/test_snapshots/
 
 # Logs
 *.log

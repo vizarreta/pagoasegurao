@@ -1,4 +1,30 @@
-import { buildCanonicalMessage, signMessage, addressToScVal, publicKeyToStrKey } from './stellar';
+import { Keypair } from '@stellar/stellar-sdk';
+import {
+  buildCanonicalMessage,
+  signMessage,
+  verifySignature,
+  publicKeyToStrKey,
+  strKeyToPublicKey,
+} from './stellar';
+import { base64urlEncode, base64urlDecode, generateNonce, generateRequestId } from './qr';
+
+export interface QRAPayload {
+  merchantPubKey: Uint8Array;
+  merchantAddress: string;
+  amount: bigint;
+  requestId: Uint8Array;
+}
+
+export interface QRBPayload {
+  signer: Uint8Array;
+  signerAddress: string;
+  merchantPubKey: Uint8Array;
+  merchantAddress: string;
+  amount: bigint;
+  nonce: bigint;
+  expiry: bigint;
+  signature: Uint8Array;
+}
 
 export interface VoucherData {
   signer: string;
@@ -9,52 +35,183 @@ export interface VoucherData {
   signature: string;
 }
 
-export function createVoucherPayload(
+function writeBigInt64BE(target: Uint8Array, offset: number, value: bigint) {
+  let v = BigInt.asUintN(64, value);
+  for (let i = 7; i >= 0; i--) {
+    target[offset + i] = Number(v & 0xffn);
+    v >>= 8n;
+  }
+}
+
+function readBigInt64BE(source: Uint8Array, offset: number): bigint {
+  let v = 0n;
+  for (let i = 0; i < 8; i++) {
+    v = (v << 8n) | BigInt(source[offset + i]);
+  }
+  return v;
+}
+
+// QR-A: SSC1. + base64url( merchant_pubkey[32] | amount_i64[8] | request_id[8] ) = 48 bytes
+export function encodeQRA(merchantAddress: string, amount: bigint, requestId?: Uint8Array): string {
+  const merchantPub = strKeyToPublicKey(merchantAddress);
+  const reqId = requestId || generateRequestId();
+
+  const payload = new Uint8Array(48);
+  payload.set(merchantPub, 0);
+  writeBigInt64BE(payload, 32, amount);
+  payload.set(reqId, 40);
+
+  return `SSC1.${base64urlEncode(payload)}`;
+}
+
+export function decodeQRA(qrString: string): QRAPayload | null {
+  const trimmed = qrString.trim();
+  if (!trimmed.startsWith('SSC1.')) return null;
+  try {
+    const raw = base64urlDecode(trimmed.slice(5));
+    if (raw.length < 48) return null;
+
+    const merchantPubKey = raw.slice(0, 32);
+    const merchantAddress = publicKeyToStrKey(merchantPubKey);
+    const amount = readBigInt64BE(raw, 32);
+    const requestId = raw.slice(40, 48);
+
+    return {
+      merchantPubKey,
+      merchantAddress,
+      amount,
+      requestId,
+    };
+  } catch {
+    return null;
+  }
+}
+
+// QR-B: SSV1. + base64url( signer[32] | merchant[32] | amount_i64[8] | nonce_u64[8] | expiry_u64[8] | sig[64] ) = 152 bytes
+export function encodeQRB(
   contractAddress: string,
-  signerKeypair: { publicKey: Uint8Array; sign: (msg: Buffer) => Buffer },
-  merchantPublicKey: Uint8Array,
+  signerKeypair: Keypair,
+  merchantAddress: string,
   amount: bigint,
-  nonce: number | bigint,
-  expiry: number | bigint
-): { message: Buffer; signature: Buffer; voucher: VoucherData } {
-  const message = buildCanonicalMessage(
+  expiry: bigint,
+  nonce?: bigint
+): { qrString: string; voucher: VoucherData; payload: QRBPayload } {
+  const actualNonce = nonce !== undefined ? nonce : generateNonce();
+  const signerPub = strKeyToPublicKey(signerKeypair.publicKey());
+  const merchantPub = strKeyToPublicKey(merchantAddress);
+
+  const canonicalMsg = buildCanonicalMessage(
     contractAddress,
-    signerKeypair.publicKey,
-    publicKeyToStrKey(merchantPublicKey),
+    signerPub,
+    merchantAddress,
     amount,
-    nonce,
+    actualNonce,
     expiry
   );
-  const signature = signMessage(signerKeypair, message);
+
+  const signature = signMessage(signerKeypair, canonicalMsg);
+
+  const binary = new Uint8Array(152);
+  binary.set(signerPub, 0);
+  binary.set(merchantPub, 32);
+  writeBigInt64BE(binary, 64, amount);
+  writeBigInt64BE(binary, 72, actualNonce);
+  writeBigInt64BE(binary, 80, expiry);
+  binary.set(signature, 88);
+
+  const qrString = `SSV1.${base64urlEncode(binary)}`;
+
+  const hexSig = Array.from(signature)
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
 
   const voucher: VoucherData = {
-    signer: publicKeyToStrKey(signerKeypair.publicKey),
-    merchant: publicKeyToStrKey(merchantPublicKey),
+    signer: publicKeyToStrKey(signerPub),
+    merchant: merchantAddress,
     amount: amount.toString(),
-    nonce: String(nonce),
-    expiry: String(expiry),
-    signature: Buffer.from(signature).toString('hex'),
+    nonce: actualNonce.toString(),
+    expiry: expiry.toString(),
+    signature: hexSig,
   };
-  return { message, signature, voucher };
+
+  const payload: QRBPayload = {
+    signer: signerPub,
+    signerAddress: voucher.signer,
+    merchantPubKey: merchantPub,
+    merchantAddress,
+    amount,
+    nonce: actualNonce,
+    expiry,
+    signature: new Uint8Array(signature),
+  };
+
+  return { qrString, voucher, payload };
 }
 
-export function voucherToQRB(voucher: VoucherData, signerBytes: Uint8Array, merchantBytes: Uint8Array, signatureBytes: Uint8Array): string {
-  const parts: Buffer[] = [];
-  parts.push(Buffer.from(signerBytes));
-  parts.push(Buffer.from(merchantBytes));
-  parts.push(Buffer.from(BigInt(voucher.amount).toString(), 'utf8')); // placeholder: use i64 BE in production
-  parts.push(Buffer.from(BigInt(voucher.nonce).toString(), 'utf8'));
-  parts.push(Buffer.from(BigInt(voucher.expiry).toString(), 'utf8'));
-  parts.push(Buffer.from(signatureBytes));
-  return `SSV1.${Buffer.concat(parts).toString('base64url')}`;
+export function decodeQRB(qrString: string): QRBPayload | null {
+  const trimmed = qrString.trim();
+  if (!trimmed.startsWith('SSV1.')) return null;
+  try {
+    const raw = base64urlDecode(trimmed.slice(5));
+    if (raw.length < 152) return null;
+
+    const signer = raw.slice(0, 32);
+    const merchantPubKey = raw.slice(32, 64);
+    const amount = readBigInt64BE(raw, 64);
+    const nonce = readBigInt64BE(raw, 72);
+    const expiry = readBigInt64BE(raw, 80);
+    const signature = raw.slice(88, 152);
+
+    return {
+      signer,
+      signerAddress: publicKeyToStrKey(signer),
+      merchantPubKey,
+      merchantAddress: publicKeyToStrKey(merchantPubKey),
+      amount,
+      nonce,
+      expiry,
+      signature,
+    };
+  } catch {
+    return null;
+  }
 }
 
-export function parseQRB(payload: string): { prefix: string; data: Buffer } | null {
-  if (!payload.startsWith('SSV1.')) return null;
-  return { prefix: 'SSV1.', data: Buffer.from(payload.slice(5), 'base64url') };
-}
+export function verifyVoucherLocally(
+  contractAddress: string,
+  payload: QRBPayload,
+  expectedMerchantAddress: string,
+  expectedAmount?: bigint
+): { valid: boolean; error?: string } {
+  if (payload.merchantAddress !== expectedMerchantAddress) {
+    return { valid: false, error: 'El comercio receptor no coincide con tu cuenta' };
+  }
 
-export function parseQRA(payload: string): { prefix: string; data: Buffer } | null {
-  if (!payload.startsWith('SSC1.')) return null;
-  return { prefix: 'SSC1.', data: Buffer.from(payload.slice(5), 'base64url') };
+  if (expectedAmount !== undefined && payload.amount !== expectedAmount) {
+    return {
+      valid: false,
+      error: `El monto (${payload.amount}) no coincide con el cobrado (${expectedAmount})`,
+    };
+  }
+
+  const nowSeconds = BigInt(Math.floor(Date.now() / 1000));
+  if (nowSeconds > payload.expiry) {
+    return { valid: false, error: 'El vale está vencido' };
+  }
+
+  const msg = buildCanonicalMessage(
+    contractAddress,
+    payload.signer,
+    payload.merchantAddress,
+    payload.amount,
+    payload.nonce,
+    payload.expiry
+  );
+
+  const sigOk = verifySignature(payload.signer, msg, payload.signature);
+  if (!sigOk) {
+    return { valid: false, error: 'Firma criptográfica inválida' };
+  }
+
+  return { valid: true };
 }

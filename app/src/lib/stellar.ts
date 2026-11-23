@@ -1,4 +1,4 @@
-import { Keypair, Address, StrKey, Networks, TransactionBuilder, xdr, scval, nativeToScVal } from '@stellar/stellar-sdk';
+import { Keypair, Address, StrKey, Networks } from '@stellar/stellar-sdk';
 
 export const NETWORK_PASSPHRASE = Networks.TESTNET;
 export const RPC_URL = 'https://soroban-testnet.stellar.org';
@@ -19,46 +19,29 @@ export function strKeyToPublicKey(strKey: string): Uint8Array {
   return StrKey.decodeEd25519PublicKey(strKey);
 }
 
-export function addressToScVal(address: string): xdr.ScVal {
-  return scval.address(Address.fromString(address));
-}
-
-export function addressToXdrHex(address: string): string {
-  const scval = addressToScVal(address);
-  const xdrBytes = scval.toXDR();
-  return Buffer.from(xdrBytes).toString('hex');
+export function addressToXdr(address: string): Buffer {
+  const addr = Address.fromString(address);
+  return Buffer.from(addr.toScVal().toXDR());
 }
 
 export function i128ToBeBytes(amount: bigint): Buffer {
-  const neg = amount < 0n;
-  const mag = neg ? -amount : amount;
-  const bytes = Buffer.alloc(16);
-  let temp = mag;
+  const buf = Buffer.alloc(16);
+  let v = BigInt.asIntN(128, amount);
   for (let i = 15; i >= 0; i--) {
-    bytes[i] = Number(temp & 255n);
-    temp >>= 8n;
+    buf[i] = Number(BigInt.asUintN(8, v & 0xffn));
+    v >>= 8n;
   }
-  if (neg) {
-    for (let i = 0; i < 16; i++) bytes[i] = ~bytes[i] & 0xff;
-    let carry = 1;
-    for (let i = 15; i >= 0 && carry; i--) {
-      const v = bytes[i] + carry;
-      bytes[i] = v & 0xff;
-      carry = v >> 8;
-    }
-  }
-  return bytes;
+  return buf;
 }
 
 export function u64ToBeBytes(value: number | bigint): Buffer {
-  const v = BigInt(value);
-  const bytes = Buffer.alloc(8);
-  let temp = v;
+  const buf = Buffer.alloc(8);
+  let v = BigInt.asUintN(64, BigInt(value));
   for (let i = 7; i >= 0; i--) {
-    bytes[i] = Number(temp & 255n);
-    temp >>= 8n;
+    buf[i] = Number(v & 0xffn);
+    v >>= 8n;
   }
-  return bytes;
+  return buf;
 }
 
 export function buildCanonicalMessage(
@@ -71,26 +54,28 @@ export function buildCanonicalMessage(
 ): Buffer {
   const parts: Buffer[] = [];
   parts.push(Buffer.from('PAGOASEGURAO1', 'ascii'));
-  parts.push(Buffer.from(addressToXdrHex(contractAddress), 'hex'));
+  parts.push(addressToXdr(contractAddress));
   parts.push(Buffer.from(signerPublicKey));
-  parts.push(Buffer.from(addressToXdrHex(merchantAddress), 'hex'));
+  parts.push(addressToXdr(merchantAddress));
   parts.push(i128ToBeBytes(amount));
   parts.push(u64ToBeBytes(nonce));
   parts.push(u64ToBeBytes(expiry));
   return Buffer.concat(parts);
 }
 
-export function signMessage(keypair: Keypair, message: Buffer): Buffer {
-  return Buffer.from(keypair.sign(message));
+export function signMessage(keypair: Keypair, message: Buffer | Uint8Array): Buffer {
+  return Buffer.from(keypair.sign(Buffer.from(message)));
 }
 
 export function verifySignature(
   publicKey: Uint8Array,
-  message: Buffer,
-  signature: Buffer
+  message: Buffer | Uint8Array,
+  signature: Buffer | Uint8Array
 ): boolean {
   try {
-    return Keypair.fromPublicKey(Buffer.from(publicKey)).verify(message, signature);
+    const strKey = StrKey.encodeEd25519PublicKey(Buffer.from(publicKey));
+    const kp = Keypair.fromPublicKey(strKey);
+    return kp.verify(Buffer.from(message), Buffer.from(signature));
   } catch {
     return false;
   }
