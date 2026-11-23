@@ -16,7 +16,7 @@ Pagos sin internet sobre Stellar testnet. Un cliente firma un vale offline, el c
 
 ```
 FASE ONLINE (preparación)
-  Cliente: crea cuenta (testnet) → recibe USDC de prueba → open_vault(monto, vencimiento)
+  Cliente: crea cuenta (testnet) → recibe tUSDC (activo de prueba) → open_vault(monto, vencimiento)
 
 FASE OFFLINE (sin internet)
   Comercio: ingresa monto → muestra QR-A (cobro)
@@ -27,7 +27,7 @@ FASE OFFLINE (sin internet)
 FASE ONLINE (liquidación)
   Comercio → relayer: envía los vales de la cola
   Relayer → contrato: redeem(vale, firma)  (el relayer paga la comisión)
-  Contrato → comercio: transfiere USDC de prueba desde la bóveda del cliente
+  Contrato → comercio: transfiere tUSDC desde la bóveda del cliente
   Cliente: al vencer la bóveda, close_vault() devuelve el saldo no gastado
 ```
 
@@ -59,7 +59,7 @@ FASE ONLINE (liquidación)
 
 ### 4.1 Activo
 
-Usar un activo de prueba propio llamado `USDC` emitido por una cuenta de testnet del proyecto y envuelto con su Stellar Asset Contract (SAC). Así se pueden crear fondos de demo a voluntad. Declarar esto en el README. El contrato recibe la dirección del token al inicializarse.
+Usar un activo de prueba propio llamado `tUSDC` (la "t" es de testnet) emitido por una cuenta de testnet del proyecto y envuelto con su Stellar Asset Contract (SAC). Así se pueden crear fondos de demo a voluntad. **No es un token con valor ni un lanzamiento de token:** es un activo de prueba sin valor económico, que simula un stablecoin como USDC. Declarar esto en el README y en el video. El contrato recibe la dirección del token al inicializarse, por lo que en el futuro podría apuntar al USDC real sin cambiar su lógica.
 
 ### 4.2 Estructuras
 
@@ -188,7 +188,7 @@ Una sola PWA con dos modos: **Cliente** y **Comercio**. Interfaz en español, pe
 Pequeño backend que paga las comisiones (esto es el *fee sponsorship* del proyecto).
 
 - `POST /api/redeem`: recibe un vale y su firma, simula la transacción, la envía con la cuenta del relayer como origen, devuelve el hash o un código de error mapeado.
-- `POST /api/faucet`: entrega USDC de prueba a una cuenta (solo testnet, con límite de uso).
+- `POST /api/faucet`: entrega tUSDC (activo de prueba, sin valor) a una cuenta (solo testnet, con límite de uso).
 - `GET /api/vault/:signer`: devuelve el estado de la bóveda para que el comercio lo consulte cuando está en línea.
 - La clave del relayer vive solo en variables de entorno (`RELAYER_SECRET`). Nunca en el repo.
 - Debe ser idempotente: reenviar el mismo vale no puede dar un error confuso al usuario.
@@ -280,7 +280,7 @@ Fechas pensadas desde el 22 de noviembre de 2026. Cada fase termina con commit y
 1. **0:00–0:25 Problema:** una escena real (feria, bus, zona sin señal) y por qué fallan los pagos digitales.
 2. **0:25–0:55 Idea y arquitectura:** diagrama simple de bóveda → vale offline → liquidación.
 3. **0:55–2:20 Demo en vivo:** cliente abre bóveda; ambos teléfonos a modo avión; comercio cobra; cliente paga; comercio ve "pago recibido"; se apaga el modo avión; se liquida; se muestra la transacción en stellar.expert.
-4. **2:20–2:50 Por qué Stellar:** Soroban, verificación de firmas, USDC, comisiones patrocinadas, finalidad en segundos.
+4. **2:20–2:50 Por qué Stellar:** Soroban, verificación de firmas, pagos en stablecoin (tUSDC en testnet, pensado para USDC), comisiones patrocinadas, finalidad en segundos.
 5. **2:50–3:00 Límites y siguientes pasos.**
 
 ## 12. Fuera de alcance (no implementar salvo que todo lo anterior funcione)
