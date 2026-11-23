@@ -3,4 +3,5 @@ resolver = "2"
 members = ["contracts/pagoasegurao"]
 
 [profile.release]
-opt-level = 3
+opt-level = "z"
+overflow-checks = true
