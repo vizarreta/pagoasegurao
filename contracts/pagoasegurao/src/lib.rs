@@ -1,12 +1,13 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, panic_with_error,
-    token::Client as TokenClient, xdr::ToXdr, Address, Bytes, BytesN, Env, Symbol,
+    contract, contracterror, contractevent, contractimpl, contracttype, panic_with_error,
+    token::Client as TokenClient, xdr::ToXdr, Address, Bytes, BytesN, Env,
 };
 
 const MAGIC: &[u8; 13] = b"PAGOASEGURAO1";
-const TTL_LEDGERS: u32 = 120_960; // ~7 days in ledgers (~5s per ledger)
+const MIN_TTL_LEDGERS: u32 = 120_960; // ~7 days at ~5s per ledger
+const TTL_BUFFER_LEDGERS: u32 = 17_280; // ~1 day extra beyond vault expiry
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[contracttype]
@@ -36,6 +37,7 @@ pub enum DataKey {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[contracterror]
+#[repr(u32)]
 pub enum Error {
     AlreadyRedeemed = 1,
     VoucherExpired = 2,
@@ -45,6 +47,56 @@ pub enum Error {
     VaultStillActive = 6,
     VaultExists = 7,
     InvalidSignature = 8,
+    Unauthorized = 9,
+    InvalidExpiry = 10,
+}
+
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Redeemed {
+    #[topic]
+    pub signer: BytesN<32>,
+    #[topic]
+    pub merchant: Address,
+    pub amount: i128,
+    pub nonce: u64,
+}
+
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VaultOpened {
+    #[topic]
+    pub signer: BytesN<32>,
+    #[topic]
+    pub owner: Address,
+    pub balance: i128,
+    pub expires_at: u64,
+    pub max_per_voucher: i128,
+}
+
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VaultClosed {
+    #[topic]
+    pub signer: BytesN<32>,
+    #[topic]
+    pub owner: Address,
+    pub refunded: i128,
+}
+
+fn compute_ttl(env: &Env, expires_at: u64) -> u32 {
+    let now = env.ledger().timestamp();
+    let remaining_secs = expires_at.saturating_sub(now);
+    let needed_ledgers = (remaining_secs / 5).saturating_add(TTL_BUFFER_LEDGERS as u64);
+    let max_ttl = env.storage().max_ttl();
+    let clamped = u32::try_from(needed_ledgers).unwrap_or(max_ttl);
+    clamped.max(MIN_TTL_LEDGERS).min(max_ttl)
+}
+
+fn extend_instance_ttl(env: &Env) {
+    let max_ttl = env.storage().max_ttl();
+    let ttl = MIN_TTL_LEDGERS.min(max_ttl);
+    env.storage().instance().extend_ttl(ttl / 2, ttl);
 }
 
 #[contract]
@@ -57,6 +109,14 @@ impl PagoAsegurao {
             panic_with_error!(&env, Error::VaultExists);
         }
         env.storage().instance().set(&DataKey::Token, &token);
+        extend_instance_ttl(&env);
+    }
+
+    pub fn get_token(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&DataKey::Token)
+            .expect("token not initialized")
     }
 
     pub fn open_vault(
@@ -73,17 +133,18 @@ impl PagoAsegurao {
             panic_with_error!(&env, Error::InvalidAmount);
         }
 
+        if expires_at <= env.ledger().timestamp() {
+            panic_with_error!(&env, Error::InvalidExpiry);
+        }
+
         let token: Address = env
             .storage()
             .instance()
             .get(&DataKey::Token)
             .expect("token not initialized");
 
-        if env
-            .storage()
-            .persistent()
-            .has(&DataKey::Vault(signer.clone()))
-        {
+        let vault_key = DataKey::Vault(signer.clone());
+        if env.storage().persistent().has(&vault_key) {
             panic_with_error!(&env, Error::VaultExists);
         }
 
@@ -92,23 +153,45 @@ impl PagoAsegurao {
         token_client.transfer(&owner, &contract_id, &amount);
 
         let vault = Vault {
-            owner,
+            owner: owner.clone(),
             balance: amount,
             expires_at,
             max_per_voucher,
         };
-        env.storage()
-            .persistent()
-            .set(&DataKey::Vault(signer.clone()), &vault);
-        env.storage()
-            .persistent()
-            .extend_ttl(&DataKey::Vault(signer), TTL_LEDGERS, TTL_LEDGERS);
+        let ttl = compute_ttl(&env, expires_at);
+        env.storage().persistent().set(&vault_key, &vault);
+        env.storage().persistent().extend_ttl(&vault_key, ttl, ttl);
+        extend_instance_ttl(&env);
+
+        VaultOpened {
+            signer,
+            owner,
+            balance: amount,
+            expires_at,
+            max_per_voucher,
+        }
+        .publish(&env);
     }
 
     pub fn top_up(env: Env, owner: Address, signer: BytesN<32>, amount: i128) {
         owner.require_auth();
         if amount <= 0 {
             panic_with_error!(&env, Error::InvalidAmount);
+        }
+
+        let vault_key = DataKey::Vault(signer.clone());
+        let mut vault: Vault = env
+            .storage()
+            .persistent()
+            .get(&vault_key)
+            .unwrap_or_else(|| panic_with_error!(&env, Error::VaultNotFound));
+
+        if vault.owner != owner {
+            panic_with_error!(&env, Error::Unauthorized);
+        }
+
+        if env.ledger().timestamp() >= vault.expires_at {
+            panic_with_error!(&env, Error::VoucherExpired);
         }
 
         let token: Address = env
@@ -120,25 +203,22 @@ impl PagoAsegurao {
         let token_client = TokenClient::new(&env, &token);
         token_client.transfer(&owner, &contract_id, &amount);
 
-        let mut vault: Vault = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Vault(signer.clone()))
-            .unwrap_or_else(|| panic_with_error!(&env, Error::VaultNotFound));
+        vault.balance = vault
+            .balance
+            .checked_add(amount)
+            .unwrap_or_else(|| panic_with_error!(&env, Error::InvalidAmount));
 
-        vault.balance = vault.balance.saturating_add(amount);
-        env.storage()
-            .persistent()
-            .set(&DataKey::Vault(signer.clone()), &vault);
+        let ttl = compute_ttl(&env, vault.expires_at);
+        env.storage().persistent().set(&vault_key, &vault);
+        env.storage().persistent().extend_ttl(&vault_key, ttl, ttl);
+        extend_instance_ttl(&env);
     }
 
     pub fn redeem(env: Env, voucher: Voucher, signature: BytesN<64>) {
+        let used_key = DataKey::Used(voucher.signer.clone(), voucher.nonce);
+
         // 1. Nonce not used
-        if env
-            .storage()
-            .persistent()
-            .has(&DataKey::Used(voucher.signer.clone(), voucher.nonce))
-        {
+        if env.storage().persistent().has(&used_key) {
             panic_with_error!(&env, Error::AlreadyRedeemed);
         }
 
@@ -147,10 +227,12 @@ impl PagoAsegurao {
         if now > voucher.expiry {
             panic_with_error!(&env, Error::VoucherExpired);
         }
+
+        let vault_key = DataKey::Vault(voucher.signer.clone());
         let vault: Vault = env
             .storage()
             .persistent()
-            .get(&DataKey::Vault(voucher.signer.clone()))
+            .get(&vault_key)
             .unwrap_or_else(|| panic_with_error!(&env, Error::VaultNotFound));
 
         if voucher.expiry > vault.expires_at {
@@ -174,25 +256,15 @@ impl PagoAsegurao {
         }
 
         // 6. Effects first: mark nonce used and deduct balance
-        env.storage()
-            .persistent()
-            .set(&DataKey::Used(voucher.signer.clone(), voucher.nonce), &true);
-        env.storage().persistent().extend_ttl(
-            &DataKey::Used(voucher.signer.clone(), voucher.nonce),
-            TTL_LEDGERS,
-            TTL_LEDGERS,
-        );
+        let ttl = compute_ttl(&env, vault.expires_at);
+        env.storage().persistent().set(&used_key, &true);
+        env.storage().persistent().extend_ttl(&used_key, ttl, ttl);
 
         let mut new_vault = vault;
-        new_vault.balance = new_vault.balance.saturating_sub(voucher.amount);
-        env.storage()
-            .persistent()
-            .set(&DataKey::Vault(voucher.signer.clone()), &new_vault);
-        env.storage().persistent().extend_ttl(
-            &DataKey::Vault(voucher.signer.clone()),
-            TTL_LEDGERS,
-            TTL_LEDGERS,
-        );
+        new_vault.balance -= voucher.amount;
+        env.storage().persistent().set(&vault_key, &new_vault);
+        env.storage().persistent().extend_ttl(&vault_key, ttl, ttl);
+        extend_instance_ttl(&env);
 
         // 7. Transfer to merchant
         let token: Address = env
@@ -204,33 +276,36 @@ impl PagoAsegurao {
         token_client.transfer(&contract_id, &voucher.merchant, &voucher.amount);
 
         // 8. Event
-        env.events().publish(
-            (
-                Symbol::new(&env, "redeemed"),
-                voucher.signer.clone(),
-                voucher.merchant.clone(),
-            ),
-            (voucher.amount, voucher.nonce),
-        );
+        Redeemed {
+            signer: voucher.signer,
+            merchant: voucher.merchant,
+            amount: voucher.amount,
+            nonce: voucher.nonce,
+        }
+        .publish(&env);
     }
 
     pub fn close_vault(env: Env, owner: Address, signer: BytesN<32>) {
         owner.require_auth();
         let now = env.ledger().timestamp();
+        let vault_key = DataKey::Vault(signer.clone());
         let vault: Vault = env
             .storage()
             .persistent()
-            .get(&DataKey::Vault(signer.clone()))
+            .get(&vault_key)
             .unwrap_or_else(|| panic_with_error!(&env, Error::VaultNotFound));
+
+        if vault.owner != owner {
+            panic_with_error!(&env, Error::Unauthorized);
+        }
 
         if now < vault.expires_at {
             panic_with_error!(&env, Error::VaultStillActive);
         }
 
         let balance = vault.balance;
-        env.storage()
-            .persistent()
-            .remove(&DataKey::Vault(signer.clone()));
+        env.storage().persistent().remove(&vault_key);
+        extend_instance_ttl(&env);
 
         if balance > 0 {
             let token: Address = env
@@ -242,6 +317,13 @@ impl PagoAsegurao {
             let token_client = TokenClient::new(&env, &token);
             token_client.transfer(&contract_id, &owner, &balance);
         }
+
+        VaultClosed {
+            signer,
+            owner,
+            refunded: balance,
+        }
+        .publish(&env);
     }
 
     pub fn get_vault(env: Env, signer: BytesN<32>) -> Option<Vault> {
