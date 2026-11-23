@@ -20,9 +20,10 @@ export const TESTNET_CONFIG = {
   networkPassphrase: NETWORK_PASSPHRASE,
   rpcUrl: RPC_URL,
   horizonUrl: HORIZON_URL,
-  assetCode: testnetDeployment.assetCode || 'tUSDC',
+  assetCode: testnetDeployment.assetCode || 'tPEN',
+  assetSymbol: (testnetDeployment as any).assetSymbol || 'S/',
   issuer: testnetDeployment.issuer,
-  tUsdcContractId: testnetDeployment.tUsdcContractId || testnetDeployment.usdcContractId,
+  tokenContractId: (testnetDeployment as any).tokenContractId,
   contractId: testnetDeployment.contractId,
   relayerAccount: testnetDeployment.relayerAccount,
   explorerBase: 'https://stellar.expert/explorer/testnet',
@@ -48,10 +49,10 @@ export function mapSorobanError(raw: string): string {
     return CONTRACT_ERROR_MAP[code] || `Error del contrato Soroban (#${code}).`;
   }
   if (/insufficient balance|underfunded|op_underfunded/i.test(raw)) {
-    return 'Saldo insuficiente de tUSDC en tu cuenta para apartar ese monto.';
+    return `Saldo insuficiente de Soles (${TESTNET_CONFIG.assetCode}) en tu cuenta para apartar ese monto.`;
   }
   if (/trustline|op_no_trust/i.test(raw)) {
-    return 'Primero activa tu cuenta para crear la línea de confianza de tUSDC.';
+    return `Primero activa tu cuenta para crear la línea de confianza de Soles (${TESTNET_CONFIG.assetCode}).`;
   }
   return raw;
 }
@@ -59,7 +60,7 @@ export function mapSorobanError(raw: string): string {
 /**
  * Parses a decimal string like "12.5" or "12,50" into exact 7-decimal stroops (BigInt) without floats.
  */
-export function parseTusdcToStroops(input: string): bigint | null {
+export function parseAmountToStroops(input: string): bigint | null {
   const normalized = input.trim().replace(',', '.');
   if (!/^\d+(\.\d{1,7})?$/.test(normalized)) return null;
   const [wholeStr, fracStr = ''] = normalized.split('.');
@@ -80,6 +81,10 @@ export function formatStroops(stroops: string | bigint | number): string {
   const twoDec = frac.slice(0, 2);
   const extra = frac.slice(2).replace(/0+$/, '');
   return `${negative ? '-' : ''}${whole}.${twoDec}${extra}`;
+}
+
+export function formatSoles(stroops: string | bigint | number): string {
+  return `${TESTNET_CONFIG.assetSymbol} ${formatStroops(stroops)}`;
 }
 
 export function keypairFromSecret(secret: string): Keypair {
@@ -163,14 +168,14 @@ export function verifySignature(
 export interface AccountBalances {
   exists: boolean;
   xlm: string;
-  tUsdc: string;
+  balance: string;
   hasTrustline: boolean;
 }
 
 export async function fetchAccountBalances(publicKey: string): Promise<AccountBalances> {
   const res = await fetch(`${TESTNET_CONFIG.horizonUrl}/accounts/${publicKey}`);
   if (res.status === 404) {
-    return { exists: false, xlm: '0', tUsdc: '0', hasTrustline: false };
+    return { exists: false, xlm: '0', balance: '0', hasTrustline: false };
   }
   if (!res.ok) {
     throw new Error(`Horizon error (${res.status})`);
@@ -185,7 +190,7 @@ export async function fetchAccountBalances(publicKey: string): Promise<AccountBa
   return {
     exists: true,
     xlm: native ? native.balance : '0',
-    tUsdc: token ? token.balance : '0',
+    balance: token ? token.balance : '0',
     hasTrustline: Boolean(token),
   };
 }
@@ -223,51 +228,48 @@ export async function ensureTrustlineOnChain(keypair: Keypair): Promise<string |
   tx.sign(keypair);
   const sendRes = await server.sendTransaction(tx);
   if (sendRes.status === 'ERROR') {
-    throw new Error('No se pudo crear la línea de confianza (trustline) de tUSDC en testnet.');
+    throw new Error(`No se pudo crear la línea de confianza (trustline) de ${TESTNET_CONFIG.assetCode} en testnet.`);
   }
   return waitForTx(server, sendRes.hash);
 }
 
 export async function activateAccountWithFaucet(
   keypair: Keypair,
-  mintTusdc: boolean
+  mintToken: boolean
 ): Promise<{
   balances: AccountBalances;
   txHash?: string;
   message: string;
 }> {
-  // Step 1: Ask backend faucet to fund XLM via Friendbot (and mint tUSDC if trustline already exists)
   const res1 = await fetch('/api/faucet', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ account: keypair.publicKey(), mintTusdc }),
+    body: JSON.stringify({ account: keypair.publicKey(), mintToken }),
   });
   const data1 = await res1.json();
   if (!res1.ok || !data1.ok) {
     throw new Error(data1.error || 'No se pudo contactar al faucet de Stellar Testnet.');
   }
 
-  // Step 2: Establish tUSDC trustline signed by the device keypair if missing
   if (!data1.hasTrustline) {
     await ensureTrustlineOnChain(keypair);
   }
 
-  // Step 3: If client requested tUSDC and hadn't received it yet, request mint now
-  if (mintTusdc && !data1.fundedTusdc) {
+  if (mintToken && !data1.fundedToken) {
     const res2 = await fetch('/api/faucet', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ account: keypair.publicKey(), mintTusdc: true }),
+      body: JSON.stringify({ account: keypair.publicKey(), mintToken: true }),
     });
     const data2 = await res2.json();
     if (!res2.ok || !data2.ok) {
-      throw new Error(data2.error || 'Error enviando tUSDC de prueba.');
+      throw new Error(data2.error || 'Error enviando Soles de prueba (tPEN).');
     }
     const balances = await fetchAccountBalances(keypair.publicKey());
     return {
       balances,
       txHash: data2.hash,
-      message: data2.message || '¡100 tUSDC de prueba acreditados en Stellar Testnet!',
+      message: data2.message || '¡S/ 200.00 (tPEN de prueba) acreditados en Stellar Testnet!',
     };
   }
 

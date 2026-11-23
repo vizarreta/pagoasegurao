@@ -11,8 +11,9 @@ import {
   topUpVaultOnChain,
   closeVaultOnChain,
   fetchVaultFromRelayer,
-  parseTusdcToStroops,
+  parseAmountToStroops,
   formatStroops,
+  formatSoles,
 } from '../lib/stellar';
 import {
   saveKeys,
@@ -58,14 +59,14 @@ export default function ClienteScreen() {
   const [balances, setBalances] = useState<AccountBalances | null>(null);
   const [step, setStep] = useState<'cuenta' | 'boveda' | 'confirm_pay' | 'show_qrb'>('cuenta');
 
-  // Vault open form
-  const [vaultAmount, setVaultAmount] = useState<string>('50');
+  // Vault open form (Peruvian Soles — tPEN)
+  const [vaultAmount, setVaultAmount] = useState<string>('100');
   const [vaultDurationSec, setVaultDurationSec] = useState<string>('259200'); // 3 days default
-  const [maxPerVoucher, setMaxPerVoucher] = useState<string>('15');
+  const [maxPerVoucher, setMaxPerVoucher] = useState<string>('30');
 
   // Top-up form
   const [showTopUp, setShowTopUp] = useState<boolean>(false);
-  const [topUpAmount, setTopUpAmount] = useState<string>('20');
+  const [topUpAmount, setTopUpAmount] = useState<string>('50');
 
   // Payment flow
   const [scanningQRA, setScanningQRA] = useState<boolean>(false);
@@ -83,7 +84,6 @@ export default function ClienteScreen() {
     loadLocalState();
   }, []);
 
-  // Tick every second when a vault exists so expiration / close_vault unlocks live
   useEffect(() => {
     if (!vaultRecord) return;
     const timer = setInterval(() => {
@@ -102,7 +102,6 @@ export default function ClienteScreen() {
         if (savedVault) {
           setVaultRecord(savedVault);
         }
-        // Best-effort online sync on startup
         if (typeof navigator === 'undefined' || navigator.onLine) {
           syncFromChain(savedKey.publicKey, true);
         }
@@ -121,8 +120,6 @@ export default function ClienteScreen() {
       setBalances(remote.balances);
       if (remote.exists && remote.vault) {
         const localVault = await getVault('client_vault');
-        // Keep the lower of on-chain balance vs local offline balance if same vault
-        // so unredeemed offline vouchers aren't accidentally double-counted before settlement
         let effectiveBalance = BigInt(remote.vault.balance);
         if (localVault && localVault.expiresAt === remote.vault.expiresAt) {
           const localBal = BigInt(localVault.balance);
@@ -142,7 +139,6 @@ export default function ClienteScreen() {
         await saveVault('client_vault', merged);
         setVaultRecord(merged);
       } else {
-        // Vault does not exist on-chain (closed or not yet opened)
         const localVault = await getVault('client_vault');
         if (localVault) {
           await deleteVault('client_vault');
@@ -153,7 +149,6 @@ export default function ClienteScreen() {
         setStatusMsg({ type: 'ok', text: 'Estado sincronizado con Stellar Testnet.' });
       }
     } catch (err: any) {
-      // Fallback: try Horizon balances directly if relayer unavailable
       try {
         const bal = await fetchAccountBalances(pubKey);
         setBalances(bal);
@@ -187,11 +182,11 @@ export default function ClienteScreen() {
     };
     await saveKeys('client', record);
     setKeyRecord(record);
-    setBalances({ exists: false, xlm: '0', tUsdc: '0', hasTrustline: false });
+    setBalances({ exists: false, xlm: '0', balance: '0', hasTrustline: false });
     setStep('boveda');
     setStatusMsg({
       type: 'ok',
-      text: 'Cuenta creada en este celular. Ahora actívala en línea para recibir 100 tUSDC de prueba.',
+      text: 'Cuenta creada en este celular. Ahora actívala en línea para recibir S/ 200.00 de prueba.',
     });
   };
 
@@ -205,7 +200,7 @@ export default function ClienteScreen() {
     setBusyAction('faucet');
     setStatusMsg({
       type: 'info',
-      text: 'Activando cuenta en Stellar Testnet (Friendbot + trustline tUSDC + 100 tUSDC de prueba)...',
+      text: 'Activando cuenta en Stellar Testnet (Friendbot + trustline tPEN + S/ 200.00 de prueba)...',
     });
 
     try {
@@ -235,16 +230,16 @@ export default function ClienteScreen() {
       return;
     }
 
-    const units = parseTusdcToStroops(vaultAmount);
-    const maxUnits = parseTusdcToStroops(maxPerVoucher);
+    const units = parseAmountToStroops(vaultAmount);
+    const maxUnits = parseAmountToStroops(maxPerVoucher);
     if (!units) {
-      setStatusMsg({ type: 'error', text: 'Ingresa un monto válido en tUSDC para la bóveda.' });
+      setStatusMsg({ type: 'error', text: 'Ingresa un monto válido en Soles (S/) para la bóveda.' });
       return;
     }
     if (!maxUnits || maxUnits > units) {
       setStatusMsg({
         type: 'error',
-        text: 'El tope por compra debe ser mayor a 0 y no superar el monto total apartado.',
+        text: 'El tope por compra debe ser mayor a S/ 0 y no superar el monto total apartado.',
       });
       return;
     }
@@ -255,7 +250,7 @@ export default function ClienteScreen() {
     setBusyAction('open_vault');
     setStatusMsg({
       type: 'info',
-      text: `Apartando ${formatStroops(units)} tUSDC en el contrato Soroban (confirmando en Stellar Testnet)...`,
+      text: `Apartando ${formatSoles(units)} en el contrato Soroban (confirmando en Stellar Testnet)...`,
     });
 
     try {
@@ -279,7 +274,7 @@ export default function ClienteScreen() {
 
       setStatusMsg({
         type: 'ok',
-        text: `¡Bóveda abierta en Soroban con ${formatStroops(units)} tUSDC! Ya puedes activar el Modo Avión y pagar sin señal.`,
+        text: `¡Bóveda abierta en Soroban con ${formatSoles(units)}! Ya puedes activar el Modo Avión y pagar sin señal.`,
         txHash,
       });
     } catch (err: any) {
@@ -299,14 +294,14 @@ export default function ClienteScreen() {
       setStatusMsg({ type: 'error', text: 'Necesitas internet para recargar tu bóveda en Soroban.' });
       return;
     }
-    const units = parseTusdcToStroops(topUpAmount);
+    const units = parseAmountToStroops(topUpAmount);
     if (!units) {
-      setStatusMsg({ type: 'error', text: 'Ingresa un monto válido para recargar.' });
+      setStatusMsg({ type: 'error', text: 'Ingresa un monto válido en Soles para recargar.' });
       return;
     }
 
     setBusyAction('top_up');
-    setStatusMsg({ type: 'info', text: `Agregando ${formatStroops(units)} tUSDC a tu bóveda en Soroban...` });
+    setStatusMsg({ type: 'info', text: `Agregando ${formatSoles(units)} a tu bóveda en Soroban...` });
     try {
       const kp = keypairFromSecret(keyRecord.secretKey);
       const txHash = await topUpVaultOnChain(kp, units);
@@ -323,7 +318,7 @@ export default function ClienteScreen() {
       setBalances(freshBal);
       setStatusMsg({
         type: 'ok',
-        text: `¡Bóveda recargada con +${formatStroops(units)} tUSDC!`,
+        text: `¡Bóveda recargada con +${formatSoles(units)}!`,
         txHash,
       });
     } catch (err: any) {
@@ -342,7 +337,7 @@ export default function ClienteScreen() {
     setBusyAction('close_vault');
     setStatusMsg({
       type: 'info',
-      text: 'Cerrando bóveda en Soroban y devolviendo el saldo restante a tu cuenta...',
+      text: 'Cerrando bóveda en Soroban y devolviendo tus Soles restantes a tu cuenta...',
     });
 
     try {
@@ -393,14 +388,14 @@ export default function ClienteScreen() {
     const maxAllowed = BigInt(vaultRecord.maxPerVoucher);
 
     if (payload.amount <= 0n) {
-      setStatusMsg({ type: 'error', text: 'El monto del cobro debe ser mayor a cero.' });
+      setStatusMsg({ type: 'error', text: 'El monto del cobro debe ser mayor a S/ 0.' });
       return;
     }
 
     if (payload.amount > currentBalance) {
       setStatusMsg({
         type: 'error',
-        text: `Saldo insuficiente en tu bóveda. Disponible: ${formatStroops(currentBalance)} tUSDC; cobro: ${formatStroops(payload.amount)} tUSDC.`,
+        text: `Saldo insuficiente en tu bóveda. Disponible: ${formatSoles(currentBalance)}; cobro: ${formatSoles(payload.amount)}.`,
       });
       return;
     }
@@ -408,7 +403,7 @@ export default function ClienteScreen() {
     if (payload.amount > maxAllowed) {
       setStatusMsg({
         type: 'error',
-        text: `El cobro (${formatStroops(payload.amount)} tUSDC) supera tu tope de ${formatStroops(maxAllowed)} tUSDC por vale.`,
+        text: `El cobro (${formatSoles(payload.amount)}) supera tu tope de ${formatSoles(maxAllowed)} por vale.`,
       });
       return;
     }
@@ -433,7 +428,6 @@ export default function ClienteScreen() {
         expiry
       );
 
-      // Deduct balance locally immediately so offline spending stays within vault limit
       const currentBalance = BigInt(vaultRecord.balance);
       const newBalance = currentBalance - scannedQRA.amount;
       const updatedVault: VaultRecord = { ...vaultRecord, balance: newBalance.toString() };
@@ -456,7 +450,7 @@ export default function ClienteScreen() {
       setHistory((prev) => [vRecord, ...prev]);
 
       setGeneratedQRB(qrString);
-      setLastPaidAmount(formatStroops(scannedQRA.amount));
+      setLastPaidAmount(formatSoles(scannedQRA.amount));
       setScannedQRA(null);
       setStep('show_qrb');
       setStatusMsg({
@@ -470,7 +464,7 @@ export default function ClienteScreen() {
 
   const isVaultExpired = vaultRecord ? nowSec >= vaultRecord.expiresAt : false;
   const secondsUntilExpiry = vaultRecord ? Math.max(0, vaultRecord.expiresAt - nowSec) : 0;
-  const walletTusdcNum = balances ? parseFloat(balances.tUsdc) : 0;
+  const walletBalanceNum = balances ? parseFloat(balances.balance) : 0;
 
   return (
     <div className="cliente-container">
@@ -504,15 +498,15 @@ export default function ClienteScreen() {
             <Wallet className="icon-main" />
             <h2>Bienvenido a PagoAsegurao</h2>
             <p>
-              Aparta fondos en tu bóveda Soroban antes de salir y paga en ferias, mercados o buses incluso en Modo Avión.
-              Tu pago queda <strong>asegurado hasta el monto apartado</strong>.
+              Aparta Soles de prueba en tu bóveda Soroban antes de salir y paga en ferias, mercados o buses incluso en
+              Modo Avión. Tu pago queda <strong>asegurado hasta el monto apartado</strong>.
             </p>
           </div>
           <button className="btn btn-primary btn-block" onClick={handleCrearCuenta}>
             Crear cuenta en este celular
           </button>
           <p className="disclaimer-note">
-            Solo Stellar Testnet · Clave de prueba guardada en IndexedDB de este navegador.
+            Solo Stellar Testnet · Soles de prueba (tPEN) sin valor económico · Clave de demo guardada en este navegador.
           </p>
         </div>
       )}
@@ -550,9 +544,9 @@ export default function ClienteScreen() {
 
             <div className="wallet-balance-row">
               <div>
-                <span className="stat-label">Saldo libre en wallet (tUSDC):</span>
+                <span className="stat-label">Saldo libre en wallet (Soles de prueba):</span>
                 <span className="wallet-balance-val">
-                  {balances ? Number(balances.tUsdc).toFixed(2) : '—'} <small>tUSDC</small>
+                  {balances ? `S/ ${Number(balances.balance).toFixed(2)}` : '—'} <small>tPEN</small>
                 </span>
               </div>
               <div className="wallet-btn-col">
@@ -562,7 +556,7 @@ export default function ClienteScreen() {
                   disabled={busyAction !== null}
                 >
                   <RefreshCw size={14} className={busyAction === 'faucet' ? 'spin' : ''} />
-                  {balances?.hasTrustline ? '+100 tUSDC' : 'Activar y pedir 100 tUSDC'}
+                  {balances?.hasTrustline ? '+ S/ 200.00' : 'Activar y pedir S/ 200'}
                 </button>
                 <button
                   className="btn btn-ghost btn-sm"
@@ -577,7 +571,8 @@ export default function ClienteScreen() {
 
             {balances && !balances.hasTrustline && (
               <p className="subtext helper-warn">
-                Paso 1: Presiona <strong>"Activar y pedir 100 tUSDC"</strong> con internet para fondear tu cuenta y recibir fondos de prueba.
+                Paso 1: Presiona <strong>"Activar y pedir S/ 200"</strong> con internet para fondear tu cuenta y recibir
+                Soles de prueba (tPEN).
               </p>
             )}
           </div>
@@ -598,13 +593,13 @@ export default function ClienteScreen() {
             <div className="vault-balance-display">
               <span className="label">Saldo disponible para pagar offline:</span>
               <span className="balance-amount">
-                {vaultRecord ? formatStroops(vaultRecord.balance) : '0.00'} <small>tUSDC</small>
+                S/ {vaultRecord ? formatStroops(vaultRecord.balance) : '0.00'} <small>tPEN</small>
               </span>
               {vaultRecord ? (
                 <>
                   <span className="vault-limits">
                     <Clock size={14} /> Vence: {new Date(vaultRecord.expiresAt * 1000).toLocaleString()} · Tope/vale:{' '}
-                    {formatStroops(vaultRecord.maxPerVoucher)} tUSDC
+                    {formatSoles(vaultRecord.maxPerVoucher)}
                   </span>
                   {!isVaultExpired && secondsUntilExpiry <= 300 && (
                     <span className="vault-countdown">
@@ -614,7 +609,7 @@ export default function ClienteScreen() {
                 </>
               ) : (
                 <span className="vault-limits">
-                  Aún no tienes una bóveda activa. Aparta tUSDC abajo mientras tengas conexión.
+                  Aún no tienes una bóveda activa. Aparta Soles abajo mientras tengas conexión.
                 </span>
               )}
             </div>
@@ -636,7 +631,7 @@ export default function ClienteScreen() {
                   onClick={() => setShowTopUp((prev) => !prev)}
                   disabled={busyAction !== null}
                 >
-                  <PlusCircle size={16} /> Recargar bóveda (top_up)
+                  <PlusCircle size={16} /> Recargar bóveda (+ S/)
                 </button>
               )}
 
@@ -665,32 +660,32 @@ export default function ClienteScreen() {
                   inputMode="decimal"
                   value={topUpAmount}
                   onChange={(e) => setTopUpAmount(e.target.value)}
-                  placeholder="Monto tUSDC"
+                  placeholder="Monto en S/"
                   className="input-text"
                   required
                 />
                 <button type="submit" className="btn btn-primary" disabled={busyAction !== null}>
-                  {busyAction === 'top_up' ? 'Enviando...' : 'Agregar'}
+                  {busyAction === 'top_up' ? 'Enviando...' : 'Agregar S/'}
                 </button>
               </form>
             )}
           </div>
 
-          {/* Open Vault Form (shown only when no active vault exists on-chain) */}
+          {/* Open Vault Form */}
           {!vaultRecord && (
             <div className="card">
               <div className="card-header">
                 <Lock size={20} className="inline-icon" />
-                <h3>Apartar Fondos en Bóveda (`open_vault`)</h3>
+                <h3>Apartar Soles en Bóveda (`open_vault`)</h3>
                 <p>
-                  Bloquea tus tUSDC en el contrato Soroban antes de quedarte sin señal. El pago queda asegurado hasta el
-                  monto apartado.
+                  Bloquea tus Soles de prueba (tPEN) en el contrato Soroban antes de quedarte sin señal. El pago queda
+                  asegurado hasta el monto apartado.
                 </p>
               </div>
 
               <form onSubmit={handleAbrirBoveda} className="form-vertical">
                 <div className="form-group">
-                  <label>Monto total a apartar (tUSDC):</label>
+                  <label>Monto total a apartar (S/):</label>
                   <input
                     type="text"
                     inputMode="decimal"
@@ -702,7 +697,7 @@ export default function ClienteScreen() {
                 </div>
 
                 <div className="form-group">
-                  <label>Tope máximo por compra (tUSDC):</label>
+                  <label>Tope máximo por compra (S/):</label>
                   <input
                     type="text"
                     inputMode="decimal"
@@ -731,7 +726,7 @@ export default function ClienteScreen() {
                 <button
                   type="submit"
                   className="btn btn-primary btn-block"
-                  disabled={busyAction !== null || walletTusdcNum <= 0}
+                  disabled={busyAction !== null || walletBalanceNum <= 0}
                 >
                   <ShieldCheck size={18} />
                   {busyAction === 'open_vault'
@@ -754,10 +749,10 @@ export default function ClienteScreen() {
                   <p className="merchant-addr">{scannedQRA.merchantAddress}</p>
                   <div className="confirm-amount">
                     <span>Monto a pagar:</span>
-                    <h2>{formatStroops(scannedQRA.amount)} tUSDC</h2>
+                    <h2>{formatSoles(scannedQRA.amount)}</h2>
                   </div>
                   <p className="subtext">
-                    Este vale se firmará localmente con Ed25519 (sin internet) y se pagará desde tus fondos apartados.
+                    Este vale se firmará localmente con Ed25519 (sin internet) y se pagará desde tus Soles apartados.
                   </p>
                 </div>
                 <div className="btn-group">
@@ -787,7 +782,7 @@ export default function ClienteScreen() {
 
               <div className="qrb-details">
                 <p>
-                  <strong>Monto:</strong> {lastPaidAmount} tUSDC
+                  <strong>Monto:</strong> {lastPaidAmount} <small>(tPEN)</small>
                 </p>
                 <p className="voucher-code" title={generatedQRB}>
                   {generatedQRB.slice(0, 32)}...
@@ -839,14 +834,14 @@ export default function ClienteScreen() {
                       </span>
                     </div>
                     <div className="history-right">
-                      <span className="item-amount">- {formatStroops(v.amount)} tUSDC</span>
+                      <span className="item-amount">- {formatSoles(v.amount)}</span>
                       {v.qrString && (
                         <button
                           type="button"
                           className="btn-chip"
                           onClick={() => {
                             setGeneratedQRB(v.qrString!);
-                            setLastPaidAmount(formatStroops(v.amount));
+                            setLastPaidAmount(formatSoles(v.amount));
                             setStep('show_qrb');
                           }}
                         >
@@ -861,8 +856,8 @@ export default function ClienteScreen() {
           )}
 
           <p className="disclaimer-note">
-            tUSDC es un activo de prueba sin valor económico en Stellar Testnet. Las claves residen en este navegador solo
-            para la demo.
+            tPEN (S/) es un activo de prueba sin valor económico en Stellar Testnet (no son soles reales). Las claves
+            residen en este navegador solo para la demo.
           </p>
         </>
       )}

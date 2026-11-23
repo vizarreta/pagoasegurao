@@ -46,7 +46,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const [simRes, balances] = await Promise.all([
       server.simulateTransaction(tx),
-      fetchHorizonBalances(signer, config.tUsdcIssuer, config.horizonUrl),
+      fetchHorizonBalances(signer, config.tokenIssuer, config.horizonUrl, config.assetCode),
     ]);
 
     if (rpc.Api.isSimulationError(simRes) || !simRes.result) {

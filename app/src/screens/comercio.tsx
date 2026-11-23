@@ -8,8 +8,9 @@ import {
   fetchAccountBalances,
   activateAccountWithFaucet,
   fetchVaultFromRelayer,
-  parseTusdcToStroops,
+  parseAmountToStroops,
   formatStroops,
+  formatSoles,
 } from '../lib/stellar';
 import {
   saveKeys,
@@ -47,7 +48,7 @@ interface StatusAlert {
   text: string;
 }
 
-const PRESET_AMOUNTS = ['2.50', '5.00', '10.00', '15.00'];
+const PRESET_AMOUNTS = ['2.00', '5.00', '10.00', '20.00'];
 
 export default function ComercioScreen() {
   const [keyRecord, setKeyRecord] = useState<KeyRecord | null>(null);
@@ -89,7 +90,6 @@ export default function ComercioScreen() {
         return;
       }
 
-      // Always read fresh queue from IndexedDB to avoid React stale closure bugs
       const freshQueue = (await getMerchantVouchers()).sort((a, b) => b.createdAt - a.createdAt);
       const pendings = freshQueue.filter((v) => v.status === 'pendiente');
       if (pendings.length === 0) return;
@@ -127,7 +127,6 @@ export default function ComercioScreen() {
             settledCount++;
           } else {
             const errText = data.error || 'El contrato rechazó el vale.';
-            // Keep as pendiente only on 5xx transient server/network issues
             if (res.status >= 500) {
               networkFailCount++;
             } else {
@@ -152,7 +151,7 @@ export default function ComercioScreen() {
       if (settledCount > 0 && rejectedCount === 0 && networkFailCount === 0) {
         setStatusMsg({
           type: 'ok',
-          text: `¡${settledCount} vale(s) liquidado(s) en Stellar Testnet! Revisa tu saldo real y el enlace al explorador.`,
+          text: `¡${settledCount} vale(s) liquidado(s) en Stellar Testnet! Revisa tu saldo en Soles y el enlace al explorador.`,
         });
       } else if (rejectedCount > 0) {
         setStatusMsg({
@@ -196,7 +195,6 @@ export default function ComercioScreen() {
     loadComercio();
   }, [refreshMerchantBalances]);
 
-  // Automatic settlement as soon as connection returns (airplane mode off)
   useEffect(() => {
     const handleOnline = () => {
       if (keyRecord) {
@@ -228,7 +226,7 @@ export default function ComercioScreen() {
     setActivating(true);
     setStatusMsg({
       type: 'info',
-      text: 'Activando cuenta de comercio en Stellar Testnet (Friendbot + trustline tUSDC)...',
+      text: 'Activando cuenta de comercio en Stellar Testnet (Friendbot + trustline tPEN)...',
     });
 
     try {
@@ -237,7 +235,7 @@ export default function ComercioScreen() {
       setBalances(result.balances);
       setStatusMsg({
         type: 'ok',
-        text: '¡Cuenta de comercio activa con línea de confianza tUSDC! Ya puedes cobrar incluso en Modo Avión.',
+        text: '¡Cuenta de comercio activa con línea de confianza para Soles (tPEN)! Ya puedes cobrar incluso en Modo Avión.',
       });
     } catch (err: any) {
       setStatusMsg({
@@ -253,9 +251,9 @@ export default function ComercioScreen() {
     e.preventDefault();
     if (!keyRecord) return;
 
-    const units = parseTusdcToStroops(amountInput);
+    const units = parseAmountToStroops(amountInput);
     if (!units) {
-      setStatusMsg({ type: 'error', text: 'Ingresa un monto válido en tUSDC.' });
+      setStatusMsg({ type: 'error', text: 'Ingresa un monto válido en Soles (S/).' });
       return;
     }
 
@@ -264,7 +262,7 @@ export default function ComercioScreen() {
     setGeneratedQRA(qra);
     setStatusMsg({
       type: 'info',
-      text: `QR-A listo por ${formatStroops(units)} tUSDC. Muéstralo al cliente para que firme el vale.`,
+      text: `QR-A listo por ${formatSoles(units)}. Muéstralo al cliente para que firme el vale.`,
     });
   };
 
@@ -278,7 +276,6 @@ export default function ComercioScreen() {
       return;
     }
 
-    // Block duplicate offline scan of the exact same voucher (signer, nonce)
     const duplicate = await hasMerchantVoucher(payload.signerAddress, payload.nonce.toString());
     if (duplicate) {
       setStatusMsg({
@@ -288,7 +285,6 @@ export default function ComercioScreen() {
       return;
     }
 
-    // Full local cryptographic verification (works 100% offline in Airplane Mode)
     const verification = verifyVoucherLocally(
       TESTNET_CONFIG.contractId,
       payload,
@@ -304,7 +300,6 @@ export default function ComercioScreen() {
       return;
     }
 
-    // Check cached or live vault balance to inform merchant of residual offline risk (SPEC §3)
     let vaultInfo: CachedVaultRecord | null = (await getVaultCache(payload.signerAddress)) || null;
     if (typeof navigator !== 'undefined' && navigator.onLine) {
       try {
@@ -321,13 +316,13 @@ export default function ComercioScreen() {
           await saveVaultCache(vaultInfo);
         }
       } catch {
-        // Offline or RPC slow — keep cached value
+        // Offline or RPC slow
       }
     }
 
     let highRiskWarning: string | undefined;
     if (vaultInfo && BigInt(vaultInfo.balance) < payload.amount) {
-      highRiskWarning = `Advertencia: según la última sincronización, la bóveda tenía ${formatStroops(vaultInfo.balance)} tUSDC (menor al vale).`;
+      highRiskWarning = `Advertencia: según la última sincronización, la bóveda tenía ${formatSoles(vaultInfo.balance)} (menor al vale).`;
     }
 
     const hexSig = Array.from(payload.signature)
@@ -351,7 +346,7 @@ export default function ComercioScreen() {
     setQueue(updatedQueue);
 
     setLastReceived({
-      amount: formatStroops(payload.amount),
+      amount: formatSoles(payload.amount),
       signer: payload.signerAddress,
       vaultInfo,
       highRiskWarning,
@@ -361,10 +356,9 @@ export default function ComercioScreen() {
     setExpectedChargeUnits(null);
     setStatusMsg({
       type: 'ok',
-      text: `¡Pago recibido (${formatStroops(payload.amount)} tUSDC), verificado localmente y pendiente de liquidar!`,
+      text: `¡Pago recibido (${formatSoles(payload.amount)}), verificado localmente y pendiente de liquidar!`,
     });
 
-    // If online, settle immediately via relayer
     if (typeof navigator !== 'undefined' && navigator.onLine) {
       await syncPendingVouchers(keyRecord.publicKey);
     }
@@ -400,7 +394,7 @@ export default function ComercioScreen() {
 
       {keyRecord && (
         <>
-          {/* Merchant Account Activation Warning (if no tUSDC trustline yet) */}
+          {/* Merchant Account Activation Warning */}
           {balances && !balances.hasTrustline && (
             <div className="card activation-card">
               <div className="card-header">
@@ -408,8 +402,8 @@ export default function ComercioScreen() {
                   <Sparkles size={18} className="inline-icon" /> Activa tu cuenta de comercio
                 </h3>
                 <p>
-                  Antes de recibir tu primera liquidación en Stellar Testnet, activa tu cuenta (Friendbot + trustline
-                  tUSDC). Solo se hace una vez con internet.
+                  Antes de recibir tu primera liquidación en Soles de prueba (tPEN) en Stellar Testnet, activa tu cuenta
+                  (Friendbot + trustline). Solo se hace una vez con internet.
                 </p>
               </div>
               <button
@@ -455,13 +449,13 @@ export default function ComercioScreen() {
               <div className="stat-card">
                 <span className="stat-label">Saldo en Stellar:</span>
                 <span className="stat-value-sm">
-                  {balances ? Number(balances.tUsdc).toFixed(2) : '—'} <small>tUSDC</small>
+                  {balances ? `S/ ${Number(balances.balance).toFixed(2)}` : '—'} <small>tPEN</small>
                 </span>
               </div>
               <div className="stat-card">
                 <span className="stat-label">Pendiente por liquidar:</span>
                 <span className="stat-value-sm pending-val">
-                  {formatStroops(totalPendiente)} <small>tUSDC</small>
+                  S/ {formatStroops(totalPendiente)} <small>tPEN</small>
                 </span>
               </div>
             </div>
@@ -494,13 +488,13 @@ export default function ComercioScreen() {
                   <CheckCircle size={18} className="inline-icon" /> Pago recibido (firma Ed25519 válida)
                 </h3>
                 <p>
-                  <strong>{lastReceived.amount} tUSDC</strong> de {lastReceived.signer.slice(0, 6)}...
+                  <strong>{lastReceived.amount}</strong> de {lastReceived.signer.slice(0, 6)}...
                   {lastReceived.signer.slice(-4)}
                 </p>
                 {lastReceived.vaultInfo && (
                   <p className="subtext mt-6">
                     Saldo de bóveda según última sincronización:{' '}
-                    <strong>{formatStroops(lastReceived.vaultInfo.balance)} tUSDC</strong>
+                    <strong>{formatSoles(lastReceived.vaultInfo.balance)}</strong>
                   </p>
                 )}
                 {lastReceived.highRiskWarning && (
@@ -521,9 +515,9 @@ export default function ComercioScreen() {
 
             <form onSubmit={handleGenerarCobro} className="form-vertical">
               <div className="form-group">
-                <label>Monto a cobrar (tUSDC):</label>
+                <label>Monto a cobrar (Soles · tPEN):</label>
                 <div className="input-with-symbol">
-                  <span className="symbol">$</span>
+                  <span className="symbol">S/</span>
                   <input
                     type="text"
                     inputMode="decimal"
@@ -541,7 +535,7 @@ export default function ComercioScreen() {
                       className={`preset-chip ${amountInput === preset ? 'active' : ''}`}
                       onClick={() => setAmountInput(preset)}
                     >
-                      ${preset}
+                      S/ {preset}
                     </button>
                   ))}
                 </div>
@@ -569,7 +563,7 @@ export default function ComercioScreen() {
                 <h3>QR de Cobro (QR-A)</h3>
                 <p>Pide al cliente que escanee este código (funciona sin internet):</p>
                 <h2 className="charge-amount">
-                  {expectedChargeUnits ? formatStroops(expectedChargeUnits) : amountInput} tUSDC
+                  {expectedChargeUnits ? formatSoles(expectedChargeUnits) : `S/ ${amountInput}`}
                 </h2>
               </div>
 
@@ -621,7 +615,7 @@ export default function ComercioScreen() {
                   <li key={v.id} className="queue-item queue-item-col">
                     <div className="queue-item-top">
                       <div className="queue-item-info">
-                        <span className="item-amount">+{formatStroops(v.amount)} tUSDC</span>
+                        <span className="item-amount">+ {formatSoles(v.amount)}</span>
                         <span className="item-client">
                           De: {v.signer.slice(0, 6)}...{v.signer.slice(-4)} ·{' '}
                           {new Date(v.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
@@ -668,8 +662,8 @@ export default function ComercioScreen() {
           </div>
 
           <p className="disclaimer-note">
-            El relayer patrocina las comisiones de red al liquidar (fee sponsorship). Asegurado hasta el monto apartado en
-            la bóveda del cliente.
+            El relayer patrocina las comisiones de red al liquidar (fee sponsorship). Activo de prueba tPEN (S/) en
+            Stellar Testnet sin valor económico. Asegurado hasta el monto apartado.
           </p>
         </>
       )}

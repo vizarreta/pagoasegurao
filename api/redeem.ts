@@ -98,8 +98,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
     }
 
-    // Verify merchant account exists and has tUSDC trustline before submitting
-    const merchantInfo = await fetchHorizonBalances(voucher.merchant, config.tUsdcIssuer, config.horizonUrl);
+    // Verify merchant account exists and has tPEN trustline before submitting
+    const merchantInfo = await fetchHorizonBalances(
+      voucher.merchant,
+      config.tokenIssuer,
+      config.horizonUrl,
+      config.assetCode
+    );
     if (!merchantInfo.exists) {
       return res.status(400).json({
         ok: false,
@@ -109,7 +114,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!merchantInfo.hasTrustline) {
       return res.status(400).json({
         ok: false,
-        error: 'La cuenta del comercio aún no activó tUSDC (trustline). Actívala en el Modo Comercio y vuelve a sincronizar.',
+        error: `La cuenta del comercio aún no activó Soles de prueba (${config.assetCode}). Actívala en el Modo Comercio y vuelve a sincronizar.`,
       });
     }
 

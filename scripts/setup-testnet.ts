@@ -20,7 +20,8 @@ import { buildCanonicalMessage } from '../app/src/lib/stellar';
 const RPC_URL = process.env.STELLAR_RPC_URL || 'https://soroban-testnet.stellar.org';
 const HORIZON_URL = 'https://horizon-testnet.stellar.org';
 const NETWORK_PASSPHRASE = Networks.TESTNET;
-const ASSET_CODE = 'tUSDC';
+const ASSET_CODE = 'tPEN';
+const ASSET_SYMBOL = 'S/';
 const DEPLOYMENTS_DIR = path.join(process.cwd(), 'deployments');
 const OUT_FILE = path.join(DEPLOYMENTS_DIR, 'testnet.json');
 const APP_PUBLIC_DEPLOYMENT = path.join(process.cwd(), 'app', 'public', 'deployments', 'testnet.json');
@@ -184,20 +185,20 @@ async function main() {
   await fundWithFriendbot(clientKp.publicKey(), 'Cliente Demo');
   await fundWithFriendbot(merchantKp.publicKey(), 'Comercio Demo');
 
-  // 2. Test asset tUSDC & SAC
-  const tUsdcAsset = new Asset(ASSET_CODE, issuer.publicKey());
-  const tUsdcContractId = tUsdcAsset.contractId(NETWORK_PASSPHRASE);
-  console.log(`\nActivo de prueba: ${ASSET_CODE} (emisor ${issuer.publicKey()})`);
-  console.log(`SAC Contract ID:  ${tUsdcContractId}`);
+  // 2. Test asset tPEN (Soles de prueba) & SAC
+  const tokenAsset = new Asset(ASSET_CODE, issuer.publicKey());
+  const tokenContractId = tokenAsset.contractId(NETWORK_PASSPHRASE);
+  console.log(`\nActivo de prueba: ${ASSET_CODE} (${ASSET_SYMBOL} Soles de prueba, emisor ${issuer.publicKey()})`);
+  console.log(`SAC Contract ID:  ${tokenContractId}`);
 
   // Establish trustlines for client and merchant
-  console.log('\n--- Paso 1: Trustlines y emisión de tUSDC ---');
+  console.log(`\n--- Paso 1: Trustlines y emisión de ${ASSET_CODE} ---`);
   const clientAcc = await server.getAccount(clientKp.publicKey());
   const clientTrustTx = new TransactionBuilder(clientAcc, {
     fee: '10000',
     networkPassphrase: NETWORK_PASSPHRASE,
   })
-    .addOperation(Operation.changeTrust({ asset: tUsdcAsset, limit: '1000000' }))
+    .addOperation(Operation.changeTrust({ asset: tokenAsset, limit: '1000000' }))
     .setTimeout(60)
     .build();
   await sendClassicTx(server, clientTrustTx, clientKp, 'Trustline Cliente');
@@ -207,12 +208,12 @@ async function main() {
     fee: '10000',
     networkPassphrase: NETWORK_PASSPHRASE,
   })
-    .addOperation(Operation.changeTrust({ asset: tUsdcAsset, limit: '1000000' }))
+    .addOperation(Operation.changeTrust({ asset: tokenAsset, limit: '1000000' }))
     .setTimeout(60)
     .build();
   await sendClassicTx(server, merchantTrustTx, merchantKp, 'Trustline Comercio');
 
-  // Mint tUSDC to client & merchant
+  // Mint tPEN to client & merchant
   const issuerAccMint = await server.getAccount(issuer.publicKey());
   const mintTx = new TransactionBuilder(issuerAccMint, {
     fee: '20000',
@@ -221,23 +222,23 @@ async function main() {
     .addOperation(
       Operation.payment({
         destination: clientKp.publicKey(),
-        asset: tUsdcAsset,
+        asset: tokenAsset,
         amount: '1000.0000000',
       })
     )
     .addOperation(
       Operation.payment({
         destination: merchantKp.publicKey(),
-        asset: tUsdcAsset,
+        asset: tokenAsset,
         amount: '10.0000000',
       })
     )
     .setTimeout(60)
     .build();
-  await sendClassicTx(server, mintTx, issuer, 'Emisión tUSDC a Cliente y Comercio');
+  await sendClassicTx(server, mintTx, issuer, `Emisión ${ASSET_CODE} a Cliente y Comercio`);
 
   // 3. Deploy SAC contract (idempotent if already deployed)
-  console.log('\n--- Paso 2: Despliegue de Stellar Asset Contract (SAC) para tUSDC ---');
+  console.log(`\n--- Paso 2: Despliegue de Stellar Asset Contract (SAC) para ${ASSET_CODE} ---`);
   let sacTxHash = '';
   try {
     const issuerAccSac = await server.getAccount(issuer.publicKey());
@@ -245,14 +246,14 @@ async function main() {
       fee: '100000',
       networkPassphrase: NETWORK_PASSPHRASE,
     })
-      .addOperation(Operation.createStellarAssetContract({ asset: tUsdcAsset }))
+      .addOperation(Operation.createStellarAssetContract({ asset: tokenAsset }))
       .setTimeout(60)
       .build();
-    const sacRes = await sendSorobanTx(server, createSacTx, issuer, 'Deploy SAC tUSDC');
+    const sacRes = await sendSorobanTx(server, createSacTx, issuer, `Deploy SAC ${ASSET_CODE}`);
     sacTxHash = sacRes.hash;
   } catch (err: any) {
     if (String(err.message).includes('ExistingValue') || String(err.message).includes('already exists')) {
-      console.log(`  ✓ SAC ya existía en testnet: ${tUsdcContractId}`);
+      console.log(`  ✓ SAC ya existía en testnet: ${tokenContractId}`);
     } else {
       throw err;
     }
@@ -294,7 +295,7 @@ async function main() {
   const contractId = Address.fromScVal(createRes.returnValue).toString();
   console.log(`  ★ Contract ID real en testnet: ${contractId}`);
 
-  // Initialize contract with tUSDC SAC
+  // Initialize contract with tPEN SAC
   const issuerAccInit = await server.getAccount(issuer.publicKey());
   const initTx = new TransactionBuilder(issuerAccInit, {
     fee: '100000',
@@ -304,20 +305,20 @@ async function main() {
       Operation.invokeContractFunction({
         contract: contractId,
         function: 'initialize',
-        args: [Address.fromString(tUsdcContractId).toScVal()],
+        args: [Address.fromString(tokenContractId).toScVal()],
       })
     )
     .setTimeout(60)
     .build();
-  const initRes = await sendSorobanTx(server, initTx, issuer, 'Initialize PagoAsegurao(tUSDC SAC)');
+  const initRes = await sendSorobanTx(server, initTx, issuer, `Initialize PagoAsegurao(${ASSET_CODE} SAC)`);
   const initTxHash = initRes.hash;
 
   // 5. Real E2E Validation on Testnet: open_vault -> offline voucher -> relayer redeem -> double redeem rejected
   console.log('\n--- Paso 4: Validación E2E en vivo en Stellar Testnet ---');
   const signerBytes = StrKey.decodeEd25519PublicKey(clientKp.publicKey());
   const vaultExpiresAt = Math.floor(Date.now() / 1000) + 3 * 86400; // 3 days
-  const maxPerVoucher = 150_000_000n; // 15 tUSDC
-  const depositAmount = 500_000_000n; // 50 tUSDC
+  const maxPerVoucher = 300_000_000n; // S/ 30.00 (30 tPEN)
+  const depositAmount = 1_000_000_000n; // S/ 100.00 (100 tPEN)
 
   const clientAccVault = await server.getAccount(clientKp.publicKey());
   const openVaultTx = new TransactionBuilder(clientAccVault, {
@@ -339,11 +340,11 @@ async function main() {
     )
     .setTimeout(60)
     .build();
-  const openVaultRes = await sendSorobanTx(server, openVaultTx, clientKp, 'open_vault (50 tUSDC, tope 15 tUSDC)');
+  const openVaultRes = await sendSorobanTx(server, openVaultTx, clientKp, 'open_vault (S/ 100.00 tPEN, tope S/ 30.00)');
   const openVaultTxHash = openVaultRes.hash;
 
-  // Sign offline voucher (10 tUSDC)
-  const voucherAmount = 100_000_000n; // 10 tUSDC
+  // Sign offline voucher (S/ 15.00 = 15 tPEN)
+  const voucherAmount = 150_000_000n; // S/ 15.00
   const voucherNonce = BigInt(Date.now());
   const voucherExpiry = BigInt(vaultExpiresAt);
 
@@ -384,14 +385,14 @@ async function main() {
     )
     .setTimeout(60)
     .build();
-  const redeemRes = await sendSorobanTx(server, redeemTx, relayer, 'redeem patrocinado por Relayer (10 tUSDC)');
+  const redeemRes = await sendSorobanTx(server, redeemTx, relayer, 'redeem patrocinado por Relayer (S/ 15.00 tPEN)');
   const redeemTxHash = redeemRes.hash;
 
   // Verify on-chain state after redeem
   const merchantBalAfter = await getTokenBalance(merchantKp.publicKey(), ASSET_CODE, issuer.publicKey());
-  console.log(`  ✓ Saldo comercio en Horizon: ${merchantBalBefore} -> ${merchantBalAfter} ${ASSET_CODE}`);
-  if (Number(merchantBalAfter) - Number(merchantBalBefore) !== 10) {
-    throw new Error(`El saldo del comercio no aumentó en 10 tUSDC (${merchantBalBefore} -> ${merchantBalAfter})`);
+  console.log(`  ✓ Saldo comercio en Horizon: S/ ${merchantBalBefore} -> S/ ${merchantBalAfter} (${ASSET_CODE})`);
+  if (Number(merchantBalAfter) - Number(merchantBalBefore) !== 15) {
+    throw new Error(`El saldo del comercio no aumentó en 15 ${ASSET_CODE} (${merchantBalBefore} -> ${merchantBalAfter})`);
   }
 
   // Verify get_vault on-chain
@@ -414,8 +415,8 @@ async function main() {
     throw new Error('Error leyendo get_vault tras redeem');
   }
   const vaultNative = scValToNative(vaultSim.result.retval);
-  console.log(`  ✓ Saldo bóveda on-chain restante: ${Number(vaultNative.balance) / 1e7} ${ASSET_CODE} (esperado: 40)`);
-  if (BigInt(vaultNative.balance) !== 400_000_000n) {
+  console.log(`  ✓ Saldo bóveda on-chain restante: S/ ${Number(vaultNative.balance) / 1e7} ${ASSET_CODE} (esperado: 85)`);
+  if (BigInt(vaultNative.balance) !== 850_000_000n) {
     throw new Error(`Saldo inesperado en bóveda: ${vaultNative.balance}`);
   }
 
@@ -445,9 +446,9 @@ async function main() {
     rpcUrl: RPC_URL,
     horizonUrl: HORIZON_URL,
     assetCode: ASSET_CODE,
+    assetSymbol: ASSET_SYMBOL,
     issuer: issuer.publicKey(),
-    tUsdcContractId,
-    usdcContractId: tUsdcContractId,
+    tokenContractId,
     contractId,
     wasmHash: wasmHash.toString('hex'),
     relayerAccount: relayer.publicKey(),
@@ -464,7 +465,7 @@ async function main() {
     },
     links: {
       contract: `https://stellar.expert/explorer/testnet/contract/${contractId}`,
-      tUsdcToken: `https://stellar.expert/explorer/testnet/contract/${tUsdcContractId}`,
+      token: `https://stellar.expert/explorer/testnet/contract/${tokenContractId}`,
       issuer: `https://stellar.expert/explorer/testnet/account/${issuer.publicKey()}`,
       relayer: `https://stellar.expert/explorer/testnet/account/${relayer.publicKey()}`,
       client: `https://stellar.expert/explorer/testnet/account/${clientKp.publicKey()}`,
@@ -483,9 +484,10 @@ async function main() {
     '# Generado por scripts/setup-testnet.ts (NO commitear - protegido por .gitignore)',
     `STELLAR_RPC_URL=${RPC_URL}`,
     `STELLAR_NETWORK_PASSPHRASE=${NETWORK_PASSPHRASE}`,
+    `ASSET_CODE=${ASSET_CODE}`,
     `CONTRACT_ID=${contractId}`,
-    `TUSDC_CONTRACT_ID=${tUsdcContractId}`,
-    `TUSDC_ISSUER=${issuer.publicKey()}`,
+    `TOKEN_CONTRACT_ID=${tokenContractId}`,
+    `TOKEN_ISSUER=${issuer.publicKey()}`,
     `ISSUER_SECRET=${issuer.secret()}`,
     `RELAYER_SECRET=${relayer.secret()}`,
     '',
@@ -493,10 +495,10 @@ async function main() {
   fs.writeFileSync(LOCAL_ENV_FILE, envContents);
 
   console.log('\n============================================================');
-  console.log('DESPLIEGUE Y VALIDACIÓN E2E COMPLETADOS EN STELLAR TESTNET');
+  console.log(`DESPLIEGUE ${ASSET_CODE} (${ASSET_SYMBOL}) Y VALIDACIÓN E2E COMPLETADOS`);
   console.log('============================================================');
   console.log(`Contrato PagoAsegurao: ${deployment.links.contract}`);
-  console.log(`Token tUSDC (SAC):     ${deployment.links.tUsdcToken}`);
+  console.log(`Token ${ASSET_CODE} (SAC):     ${deployment.links.token}`);
   console.log(`Tx open_vault:         ${deployment.links.openVaultTx}`);
   console.log(`Tx redeem (Relayer):   ${deployment.links.redeemTx}`);
   console.log(`Config pública:        ${OUT_FILE}`);
