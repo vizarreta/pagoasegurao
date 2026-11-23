@@ -1,0 +1,22 @@
+{
+  "network": "testnet",
+  "networkPassphrase": "Test SDF Network ; September 2015",
+  "rpcUrl": "https://soroban-testnet.stellar.org",
+  "issuer": "GDGYOA4TT444TUH4M2OPTSP2ZCXV3BGJVEKCKPHXO22SM2VOLQKJ5SYU",
+  "usdcAssetCode": "USDC",
+  "usdcContractId": "CCPNASLGOLZ4BTDPVXT2OLQI4DSGI2UQY7VNOCZUIDK72OJSOIYDF4VO",
+  "contractId": "CCA653Z5435ZHNAWHNGDL3MNNPX37HOM7DAGAWTSJMPQST3HKNBDDHCX",
+  "clientAccount": "GCLQ62JLGOGKPUINJG6AZNUKPUQKK3JOFINSS4VDYUNS2ASI4ZAIB65W",
+  "merchantAccount": "GC4UNNAA32IVPDCHNSOPFIBE7YV4B4GBOFABP5EHZV5Y7Q32F6JTR6TO",
+  "createdAt": "2026-11-22T23:01:30.415Z",
+  "transactions": {
+    "sacDeploy": "380fa530cf954d9159b9a1ecab2bc39a94438a9fd9de8bc2a2ec6c150eba0980"
+  },
+  "links": {
+    "contract": "https://stellar.expert/explorer/testnet/contract/CCA653Z5435ZHNAWHNGDL3MNNPX37HOM7DAGAWTSJMPQST3HKNBDDHCX",
+    "usdcToken": "https://stellar.expert/explorer/testnet/contract/CCPNASLGOLZ4BTDPVXT2OLQI4DSGI2UQY7VNOCZUIDK72OJSOIYDF4VO",
+    "issuer": "https://stellar.expert/explorer/testnet/account/GDGYOA4TT444TUH4M2OPTSP2ZCXV3BGJVEKCKPHXO22SM2VOLQKJ5SYU",
+    "client": "https://stellar.expert/explorer/testnet/account/GCLQ62JLGOGKPUINJG6AZNUKPUQKK3JOFINSS4VDYUNS2ASI4ZAIB65W",
+    "merchant": "https://stellar.expert/explorer/testnet/account/GC4UNNAA32IVPDCHNSOPFIBE7YV4B4GBOFABP5EHZV5Y7Q32F6JTR6TO"
+  }
+}

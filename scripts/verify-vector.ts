@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
-import { buildCanonicalMessage, verifySignature } from '../app/src/lib/stellar';
+import { Keypair, StrKey } from '@stellar/stellar-sdk';
+import { buildCanonicalMessage, verifySignature, signMessage } from '../app/src/lib/stellar';
 
 const VECTOR_FILE = path.join(
   process.cwd(),
@@ -11,34 +12,56 @@ const VECTOR_FILE = path.join(
 );
 
 async function main() {
-  const vector = JSON.parse(fs.readFileSync(VECTOR_FILE, 'utf8'));
-  console.log('Validando vector de prueba compartido:', vector);
+  const seed = Buffer.alloc(32, 42); // Seed = [42; 32]
+  const secret = StrKey.encodeEd25519SecretSeed(seed);
+  const signerKp = Keypair.fromSecret(secret);
+  const signerPub = signerKp.rawPublicKey();
 
-  const contractAddress = vector.contract_address;
-  const signerBytes = Buffer.from(vector.signer, 'hex');
-  const merchantStrKey = vector.merchant;
-  const amount = BigInt(vector.amount);
-  const nonce = BigInt(vector.nonce);
-  const expiry = BigInt(vector.expiry);
+  const contractAddress = StrKey.encodeContract(Buffer.alloc(32, 1));
+  const merchantAddress = StrKey.encodeEd25519PublicKey(Buffer.alloc(32, 2));
+  const amount = 10_000_000n; // 1 USDC
+  const nonce = 42n;
+  const expiry = 1735689600n;
 
   const message = buildCanonicalMessage(
     contractAddress,
-    signerBytes,
-    merchantStrKey,
+    signerPub,
+    merchantAddress,
     amount,
     nonce,
     expiry
   );
 
-  if (vector.signature_hex) {
-    const ok = verifySignature(signerBytes, message, Buffer.from(vector.signature_hex, 'hex'));
-    console.log(`Firma válida: ${ok}`);
-    if (!ok && vector.expected_valid) {
-      throw new Error('El vector de prueba esperaba una firma válida');
-    }
-  } else {
-    console.log('Mensaje canónico generado (sin firma):', message.toString('hex'));
-    console.log('Falta signature_hex en el vector; generarla con la clave del signer y volver a ejecutar.');
+  const signature = signMessage(signerKp, message);
+  const isValid = verifySignature(signerPub, message, signature);
+
+  const vector = {
+    version: 1,
+    network: 'Test SDF Network ; September 2015',
+    contract_address: contractAddress,
+    signer: Buffer.from(signerPub).toString('hex'),
+    signer_strkey: signerKp.publicKey(),
+    merchant: merchantAddress,
+    amount: Number(amount),
+    nonce: Number(nonce),
+    expiry: Number(expiry),
+    message_hex: message.toString('hex'),
+    signature_hex: Buffer.from(signature).toString('hex'),
+    expected_valid: true,
+    note: 'Vector de prueba compartido entre Rust (cargo test) y TypeScript (scripts/verify-vector.ts).'
+  };
+
+  fs.writeFileSync(VECTOR_FILE, JSON.stringify(vector, null, 2));
+  console.log('Vector de prueba compartido generado y verificado:');
+  console.log(`- Contract: ${contractAddress}`);
+  console.log(`- Signer: ${vector.signer_strkey} (${vector.signer})`);
+  console.log(`- Merchant: ${merchantAddress}`);
+  console.log(`- Message hex (${message.length} bytes): ${vector.message_hex}`);
+  console.log(`- Signature hex (${signature.length} bytes): ${vector.signature_hex}`);
+  console.log(`- Signature valid: ${isValid}`);
+
+  if (!isValid) {
+    throw new Error('Fallo la verificacion de la firma en TypeScript');
   }
 
   console.log('OK: vector de prueba compartido consistente');
