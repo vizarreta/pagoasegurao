@@ -1,20 +1,30 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
-import { randomKeypair } from '../lib/stellar';
+import {
+  TESTNET_CONFIG,
+  AccountBalances,
+  randomKeypair,
+  keypairFromSecret,
+  fetchAccountBalances,
+  activateAccountWithFaucet,
+  fetchVaultFromRelayer,
+  parseTusdcToStroops,
+  formatStroops,
+} from '../lib/stellar';
 import {
   saveKeys,
   getKeys,
-  saveVoucher,
-  getVouchers,
-  updateVoucherStatus,
+  saveMerchantVoucher,
+  getMerchantVouchers,
+  hasMerchantVoucher,
+  updateMerchantVoucherStatus,
+  saveVaultCache,
+  getVaultCache,
   KeyRecord,
   VoucherRecord,
+  CachedVaultRecord,
 } from '../lib/storage';
-import {
-  encodeQRA,
-  decodeQRB,
-  verifyVoucherLocally,
-} from '../lib/voucher';
+import { encodeQRA, decodeQRB, verifyVoucherLocally } from '../lib/voucher';
 import { QRScanner } from '../components/QRScanner';
 import {
   Store,
@@ -26,82 +36,236 @@ import {
   ExternalLink,
   Camera,
   Coins,
+  Copy,
+  Check,
+  ShieldAlert,
+  Sparkles,
 } from 'lucide-react';
 
-const DEFAULT_CONTRACT = 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+interface StatusAlert {
+  type: 'ok' | 'error' | 'info' | 'warning';
+  text: string;
+}
+
+const PRESET_AMOUNTS = ['2.50', '5.00', '10.00', '15.00'];
 
 export default function ComercioScreen() {
   const [keyRecord, setKeyRecord] = useState<KeyRecord | null>(null);
-  const [contractId, setContractId] = useState<string>(DEFAULT_CONTRACT);
+  const [balances, setBalances] = useState<AccountBalances | null>(null);
+  const [activating, setActivating] = useState<boolean>(false);
+
   const [amountInput, setAmountInput] = useState<string>('5.00');
   const [generatedQRA, setGeneratedQRA] = useState<string | null>(null);
   const [expectedChargeUnits, setExpectedChargeUnits] = useState<bigint | null>(null);
 
-  // Scanner state
+  // Scanner & last received
   const [scanningQRB, setScanningQRB] = useState<boolean>(false);
-  const [lastReceivedVoucher, setLastReceivedVoucher] = useState<{ amount: string; signer: string } | null>(null);
+  const [lastReceived, setLastReceived] = useState<{
+    amount: string;
+    signer: string;
+    vaultInfo?: CachedVaultRecord | null;
+    highRiskWarning?: string;
+  } | null>(null);
 
-  // Queue & status
+  // Queue & sync
   const [queue, setQueue] = useState<VoucherRecord[]>([]);
   const [syncing, setSyncing] = useState<boolean>(false);
-  const [statusMsg, setStatusMsg] = useState<{ type: 'ok' | 'error' | 'info'; text: string } | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [statusMsg, setStatusMsg] = useState<StatusAlert | null>(null);
 
-  useEffect(() => {
-    loadComercio();
+  const refreshMerchantBalances = useCallback(async (pubKey: string) => {
+    try {
+      const bal = await fetchAccountBalances(pubKey);
+      setBalances(bal);
+    } catch {
+      // Offline — keep last known balances
+    }
   }, []);
 
-  // Auto-sync when coming online
+  const syncPendingVouchers = useCallback(
+    async (merchantPubKey?: string) => {
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        setStatusMsg({ type: 'warning', text: 'Sin conexión. Los vales se liquidarán al recuperar señal.' });
+        return;
+      }
+
+      // Always read fresh queue from IndexedDB to avoid React stale closure bugs
+      const freshQueue = (await getMerchantVouchers()).sort((a, b) => b.createdAt - a.createdAt);
+      const pendings = freshQueue.filter((v) => v.status === 'pendiente');
+      if (pendings.length === 0) return;
+
+      setSyncing(true);
+      setStatusMsg({
+        type: 'info',
+        text: `Liquidando ${pendings.length} vale(s) en Stellar Testnet (comisión patrocinada por relayer)...`,
+      });
+
+      let settledCount = 0;
+      let rejectedCount = 0;
+      let networkFailCount = 0;
+
+      for (const v of pendings) {
+        try {
+          const res = await fetch('/api/redeem', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              voucher: {
+                signer: v.signer,
+                merchant: v.merchant,
+                amount: v.amount,
+                nonce: v.nonce,
+                expiry: v.expiry,
+              },
+              signature: v.signature,
+            }),
+          });
+
+          const data = await res.json();
+          if (res.ok && data.ok && data.hash) {
+            await updateMerchantVoucherStatus(v.id, 'liquidado', data.hash, undefined);
+            settledCount++;
+          } else {
+            const errText = data.error || 'El contrato rechazó el vale.';
+            // Keep as pendiente only on 5xx transient server/network issues
+            if (res.status >= 500) {
+              networkFailCount++;
+            } else {
+              await updateMerchantVoucherStatus(v.id, 'rechazado', undefined, errText);
+              rejectedCount++;
+            }
+          }
+        } catch {
+          networkFailCount++;
+        }
+      }
+
+      const updatedQueue = (await getMerchantVouchers()).sort((a, b) => b.createdAt - a.createdAt);
+      setQueue(updatedQueue);
+
+      const pub = merchantPubKey || keyRecord?.publicKey;
+      if (pub) {
+        await refreshMerchantBalances(pub);
+      }
+
+      setSyncing(false);
+      if (settledCount > 0 && rejectedCount === 0 && networkFailCount === 0) {
+        setStatusMsg({
+          type: 'ok',
+          text: `¡${settledCount} vale(s) liquidado(s) en Stellar Testnet! Revisa tu saldo real y el enlace al explorador.`,
+        });
+      } else if (rejectedCount > 0) {
+        setStatusMsg({
+          type: 'warning',
+          text: `Sincronización terminada: ${settledCount} liquidado(s), ${rejectedCount} rechazado(s). Revisa el motivo en la cola.`,
+        });
+      } else if (networkFailCount > 0) {
+        setStatusMsg({
+          type: 'warning',
+          text: 'No se pudo conectar con el relayer. Tus vales siguen seguros en la cola local.',
+        });
+      }
+    },
+    [keyRecord?.publicKey, refreshMerchantBalances]
+  );
+
+  useEffect(() => {
+    async function loadComercio() {
+      try {
+        let savedKey = await getKeys('merchant');
+        if (!savedKey) {
+          const kp = randomKeypair();
+          savedKey = {
+            publicKey: kp.publicKey(),
+            secretKey: kp.secret(),
+          };
+          await saveKeys('merchant', savedKey);
+        }
+        setKeyRecord(savedKey);
+
+        const allVouchers = (await getMerchantVouchers()).sort((a, b) => b.createdAt - a.createdAt);
+        setQueue(allVouchers);
+
+        if (typeof navigator === 'undefined' || navigator.onLine) {
+          await refreshMerchantBalances(savedKey.publicKey);
+        }
+      } catch (e) {
+        console.error('Error loading merchant', e);
+      }
+    }
+    loadComercio();
+  }, [refreshMerchantBalances]);
+
+  // Automatic settlement as soon as connection returns (airplane mode off)
   useEffect(() => {
     const handleOnline = () => {
-      syncPendingVouchers();
+      if (keyRecord) {
+        refreshMerchantBalances(keyRecord.publicKey);
+        syncPendingVouchers(keyRecord.publicKey);
+      }
     };
     window.addEventListener('online', handleOnline);
     return () => window.removeEventListener('online', handleOnline);
-  }, [queue, contractId]);
+  }, [keyRecord, refreshMerchantBalances, syncPendingVouchers]);
 
-  async function loadComercio() {
+  const handleCopy = async (text: string, id: string) => {
     try {
-      try {
-        const res = await fetch('/deployments/testnet.json');
-        if (res.ok) {
-          const dep = await res.json();
-          if (dep.contractId) setContractId(dep.contractId);
-        }
-      } catch {}
-
-      let savedKey = await getKeys('merchant');
-      if (!savedKey) {
-        const kp = randomKeypair();
-        savedKey = {
-          publicKey: kp.publicKey(),
-          secretKey: kp.secret(),
-        };
-        await saveKeys('merchant', savedKey);
-      }
-      setKeyRecord(savedKey);
-
-      const allVouchers = await getVouchers();
-      setQueue(allVouchers.sort((a, b) => b.createdAt - a.createdAt));
-    } catch (e: any) {
-      console.error('Error loading comercio', e);
+      await navigator.clipboard.writeText(text);
+      setCopiedId(id);
+      setTimeout(() => setCopiedId(null), 1800);
+    } catch {
+      setStatusMsg({ type: 'info', text: 'Copia manualmente el código mostrado.' });
     }
-  }
+  };
+
+  const handleActivarComercio = async () => {
+    if (!keyRecord) return;
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      setStatusMsg({ type: 'error', text: 'Necesitas internet una sola vez para activar tu cuenta de comercio.' });
+      return;
+    }
+
+    setActivating(true);
+    setStatusMsg({
+      type: 'info',
+      text: 'Activando cuenta de comercio en Stellar Testnet (Friendbot + trustline tUSDC)...',
+    });
+
+    try {
+      const kp = keypairFromSecret(keyRecord.secretKey);
+      const result = await activateAccountWithFaucet(kp, false);
+      setBalances(result.balances);
+      setStatusMsg({
+        type: 'ok',
+        text: '¡Cuenta de comercio activa con línea de confianza tUSDC! Ya puedes cobrar incluso en Modo Avión.',
+      });
+    } catch (err: any) {
+      setStatusMsg({
+        type: 'error',
+        text: err?.message || 'Error al activar la cuenta de comercio en testnet.',
+      });
+    } finally {
+      setActivating(false);
+    }
+  };
 
   const handleGenerarCobro = (e: React.FormEvent) => {
     e.preventDefault();
     if (!keyRecord) return;
 
-    const val = parseFloat(amountInput);
-    if (isNaN(val) || val <= 0) {
-      setStatusMsg({ type: 'error', text: 'Ingresa un monto válido a cobrar' });
+    const units = parseTusdcToStroops(amountInput);
+    if (!units) {
+      setStatusMsg({ type: 'error', text: 'Ingresa un monto válido en tUSDC.' });
       return;
     }
 
-    const units = BigInt(Math.round(val * 10_000_000));
     setExpectedChargeUnits(units);
     const qra = encodeQRA(keyRecord.publicKey, units);
     setGeneratedQRA(qra);
-    setStatusMsg({ type: 'info', text: 'QR de cobro generado. Muéstralo al cliente.' });
+    setStatusMsg({
+      type: 'info',
+      text: `QR-A listo por ${formatStroops(units)} tUSDC. Muéstralo al cliente para que firme el vale.`,
+    });
   };
 
   const handleScanQRBResult = async (scannedText: string) => {
@@ -110,13 +274,23 @@ export default function ComercioScreen() {
 
     const payload = decodeQRB(scannedText);
     if (!payload) {
-      setStatusMsg({ type: 'error', text: 'El código escaneado no es un vale válido de PagoAsegurao (SSV1)' });
+      setStatusMsg({ type: 'error', text: 'El código escaneado no es un vale válido de PagoAsegurao (SSV1).' });
       return;
     }
 
-    // Verify locally offline
+    // Block duplicate offline scan of the exact same voucher (signer, nonce)
+    const duplicate = await hasMerchantVoucher(payload.signerAddress, payload.nonce.toString());
+    if (duplicate) {
+      setStatusMsg({
+        type: 'error',
+        text: 'Vale rechazado: este vale ya fue escaneado y guardado en tu cola (doble cobro evitado).',
+      });
+      return;
+    }
+
+    // Full local cryptographic verification (works 100% offline in Airplane Mode)
     const verification = verifyVoucherLocally(
-      contractId,
+      TESTNET_CONFIG.contractId,
       payload,
       keyRecord.publicKey,
       expectedChargeUnits || undefined
@@ -130,13 +304,38 @@ export default function ComercioScreen() {
       return;
     }
 
-    // Save to queue as pending
+    // Check cached or live vault balance to inform merchant of residual offline risk (SPEC §3)
+    let vaultInfo: CachedVaultRecord | null = (await getVaultCache(payload.signerAddress)) || null;
+    if (typeof navigator !== 'undefined' && navigator.onLine) {
+      try {
+        const remote = await fetchVaultFromRelayer(payload.signerAddress);
+        if (remote.exists && remote.vault) {
+          vaultInfo = {
+            signer: payload.signerAddress,
+            exists: true,
+            balance: remote.vault.balance,
+            expiresAt: remote.vault.expiresAt,
+            maxPerVoucher: remote.vault.maxPerVoucher,
+            syncedAt: remote.syncedAt,
+          };
+          await saveVaultCache(vaultInfo);
+        }
+      } catch {
+        // Offline or RPC slow — keep cached value
+      }
+    }
+
+    let highRiskWarning: string | undefined;
+    if (vaultInfo && BigInt(vaultInfo.balance) < payload.amount) {
+      highRiskWarning = `Advertencia: según la última sincronización, la bóveda tenía ${formatStroops(vaultInfo.balance)} tUSDC (menor al vale).`;
+    }
+
     const hexSig = Array.from(payload.signature)
       .map((b) => b.toString(16).padStart(2, '0'))
       .join('');
 
     const newVoucher: VoucherRecord = {
-      id: `val-${payload.nonce}-${Date.now()}`,
+      id: `merchant-val-${payload.signerAddress.slice(-6)}-${payload.nonce}`,
       signer: payload.signerAddress,
       merchant: keyRecord.publicKey,
       amount: payload.amount.toString(),
@@ -147,76 +346,37 @@ export default function ComercioScreen() {
       createdAt: Date.now(),
     };
 
-    await saveVoucher(newVoucher);
-    setQueue((prev) => [newVoucher, ...prev]);
+    await saveMerchantVoucher(newVoucher);
+    const updatedQueue = (await getMerchantVouchers()).sort((a, b) => b.createdAt - a.createdAt);
+    setQueue(updatedQueue);
 
-    setLastReceivedVoucher({
-      amount: (Number(payload.amount) / 10_000_000).toFixed(2),
+    setLastReceived({
+      amount: formatStroops(payload.amount),
       signer: payload.signerAddress,
+      vaultInfo,
+      highRiskWarning,
     });
 
-    setGeneratedQRA(null); // clear current charge
+    setGeneratedQRA(null);
+    setExpectedChargeUnits(null);
     setStatusMsg({
       type: 'ok',
-      text: `¡Pago de ${(Number(payload.amount) / 10_000_000).toFixed(2)} USDC recibido y verificado sin internet!`,
+      text: `¡Pago recibido (${formatStroops(payload.amount)} tUSDC), verificado localmente y pendiente de liquidar!`,
     });
 
-    // If online, attempt automatic sync
+    // If online, settle immediately via relayer
     if (typeof navigator !== 'undefined' && navigator.onLine) {
-      syncPendingVouchers();
+      await syncPendingVouchers(keyRecord.publicKey);
     }
   };
 
-  const syncPendingVouchers = async () => {
-    const pendings = queue.filter((v) => v.status === 'pendiente');
-    if (pendings.length === 0) return;
-
-    setSyncing(true);
-    setStatusMsg({ type: 'info', text: `Sincronizando ${pendings.length} vale(s) con Stellar testnet...` });
-
-    for (const v of pendings) {
-      try {
-        const res = await fetch('/api/redeem', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            voucher: {
-              signer: v.signer,
-              merchant: v.merchant,
-              amount: v.amount,
-              nonce: v.nonce,
-              expiry: v.expiry,
-            },
-            signature: v.signature,
-          }),
-        });
-
-        const data = await res.json();
-        if (data.ok && data.hash) {
-          await updateVoucherStatus(v.id, 'liquidado', data.hash);
-          setQueue((prev) =>
-            prev.map((item) => (item.id === v.id ? { ...item, status: 'liquidado', txHash: data.hash } : item))
-          );
-        } else {
-          // If simulation or contract reported error
-          await updateVoucherStatus(v.id, 'rechazado', undefined, data.error || 'Error al liquidar');
-          setQueue((prev) =>
-            prev.map((item) =>
-              item.id === v.id ? { ...item, status: 'rechazado', error: data.error } : item
-            )
-          );
-        }
-      } catch (err: any) {
-        console.warn('Sync network error', err);
-      }
+  const handleRetryVoucher = async (id: string) => {
+    await updateMerchantVoucherStatus(id, 'pendiente', undefined, undefined);
+    const updated = (await getMerchantVouchers()).sort((a, b) => b.createdAt - a.createdAt);
+    setQueue(updated);
+    if (keyRecord) {
+      await syncPendingVouchers(keyRecord.publicKey);
     }
-
-    setSyncing(false);
-    setStatusMsg({ type: 'ok', text: 'Sincronización completada' });
-  };
-
-  const formatUSDC = (stroops: string) => {
-    return (Number(stroops) / 10_000_000).toFixed(2);
   };
 
   const totalPendiente = queue
@@ -225,60 +385,134 @@ export default function ComercioScreen() {
 
   return (
     <div className="comercio-container">
-      {/* Status banner */}
+      {/* Status alert banner */}
       {statusMsg && (
         <div className={`alert alert-${statusMsg.type}`}>
-          {statusMsg.type === 'ok' && <CheckCircle size={18} className="inline-icon" />}
-          {statusMsg.type === 'error' && <AlertCircle size={18} className="inline-icon" />}
-          {statusMsg.type === 'info' && <RefreshCw size={18} className="inline-icon" />}
-          <span>{statusMsg.text}</span>
+          <div className="alert-body">
+            {statusMsg.type === 'ok' && <CheckCircle size={18} className="inline-icon" />}
+            {statusMsg.type === 'error' && <AlertCircle size={18} className="inline-icon" />}
+            {statusMsg.type === 'warning' && <AlertCircle size={18} className="inline-icon" />}
+            {statusMsg.type === 'info' && <RefreshCw size={18} className="inline-icon spin" />}
+            <span>{statusMsg.text}</span>
+          </div>
         </div>
       )}
 
       {keyRecord && (
         <>
+          {/* Merchant Account Activation Warning (if no tUSDC trustline yet) */}
+          {balances && !balances.hasTrustline && (
+            <div className="card activation-card">
+              <div className="card-header">
+                <h3>
+                  <Sparkles size={18} className="inline-icon" /> Activa tu cuenta de comercio
+                </h3>
+                <p>
+                  Antes de recibir tu primera liquidación en Stellar Testnet, activa tu cuenta (Friendbot + trustline
+                  tUSDC). Solo se hace una vez con internet.
+                </p>
+              </div>
+              <button
+                className="btn btn-primary btn-block"
+                onClick={handleActivarComercio}
+                disabled={activating}
+              >
+                <RefreshCw size={16} className={activating ? 'spin' : ''} />
+                {activating ? 'Activando en Stellar Testnet...' : 'Activar cuenta de comercio en Testnet'}
+              </button>
+            </div>
+          )}
+
           {/* Header Card */}
           <div className="card merchant-header-card">
             <div className="vault-header">
               <span className="badge badge-merchant">
                 <Store size={14} /> Modo Comercio
               </span>
-              <span className="vault-address" title={keyRecord.publicKey}>
-                {keyRecord.publicKey.slice(0, 6)}...{keyRecord.publicKey.slice(-4)}
-              </span>
+              <div className="address-actions">
+                <button
+                  type="button"
+                  className="btn-chip"
+                  onClick={() => handleCopy(keyRecord.publicKey, 'merchant-addr')}
+                  title={keyRecord.publicKey}
+                >
+                  {keyRecord.publicKey.slice(0, 6)}...{keyRecord.publicKey.slice(-4)}
+                  {copiedId === 'merchant-addr' ? <Check size={12} /> : <Copy size={12} />}
+                </button>
+                <a
+                  href={`${TESTNET_CONFIG.explorerBase}/account/${keyRecord.publicKey}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="link-explorer"
+                  title="Ver cuenta en stellar.expert"
+                >
+                  <ExternalLink size={13} />
+                </a>
+              </div>
             </div>
 
-            <div className="queue-stat-box">
-              <div className="stat-item">
-                <span className="stat-label">Pendiente por liquidar:</span>
-                <span className="stat-value">{formatUSDC(totalPendiente.toString())} USDC</span>
+            <div className="merchant-stats-grid">
+              <div className="stat-card">
+                <span className="stat-label">Saldo en Stellar:</span>
+                <span className="stat-value-sm">
+                  {balances ? Number(balances.tUsdc).toFixed(2) : '—'} <small>tUSDC</small>
+                </span>
               </div>
+              <div className="stat-card">
+                <span className="stat-label">Pendiente por liquidar:</span>
+                <span className="stat-value-sm pending-val">
+                  {formatStroops(totalPendiente)} <small>tUSDC</small>
+                </span>
+              </div>
+            </div>
+
+            <div className="btn-group mt-10">
               <button
-                className="btn btn-secondary btn-sm"
-                onClick={syncPendingVouchers}
+                className="btn btn-primary btn-block"
+                onClick={() => syncPendingVouchers(keyRecord.publicKey)}
                 disabled={syncing || totalPendiente === 0n}
               >
-                <RefreshCw size={14} className={syncing ? 'spin' : ''} />
-                {syncing ? 'Liquidando...' : 'Sincronizar'}
+                <RefreshCw size={15} className={syncing ? 'spin' : ''} />
+                {syncing ? 'Liquidando en Stellar...' : 'Sincronizar y Liquidar'}
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => refreshMerchantBalances(keyRecord.publicKey)}
+                title="Actualizar saldo de Stellar Testnet"
+              >
+                <RefreshCw size={15} />
               </button>
             </div>
           </div>
 
-          {/* Último vale recibido */}
-          {lastReceivedVoucher && (
-            <div className="card alert-ok">
-              <div className="card-header">
+          {/* Last received voucher feedback */}
+          {lastReceived && (
+            <div className={`card ${lastReceived.highRiskWarning ? 'alert-warning-card' : 'alert-ok-card'}`}>
+              <div className="card-header mb-0">
                 <h3>
-                  <CheckCircle size={20} className="inline-icon" /> ¡Pago Recibido!
+                  <CheckCircle size={18} className="inline-icon" /> Pago recibido (firma Ed25519 válida)
                 </h3>
                 <p>
-                  Cobraste {lastReceivedVoucher.amount} USDC de {lastReceivedVoucher.signer.slice(0, 6)}...
+                  <strong>{lastReceived.amount} tUSDC</strong> de {lastReceived.signer.slice(0, 6)}...
+                  {lastReceived.signer.slice(-4)}
                 </p>
+                {lastReceived.vaultInfo && (
+                  <p className="subtext mt-6">
+                    Saldo de bóveda según última sincronización:{' '}
+                    <strong>{formatStroops(lastReceived.vaultInfo.balance)} tUSDC</strong>
+                  </p>
+                )}
+                {lastReceived.highRiskWarning && (
+                  <p className="warn-line mt-6">
+                    <ShieldAlert size={14} className="inline-icon" /> {lastReceived.highRiskWarning}
+                  </p>
+                )}
               </div>
             </div>
           )}
 
-          {/* Formulario de cobro */}
+          {/* Charge Form */}
           <div className="card">
             <div className="card-header">
               <Coins size={20} className="inline-icon" />
@@ -287,31 +521,42 @@ export default function ComercioScreen() {
 
             <form onSubmit={handleGenerarCobro} className="form-vertical">
               <div className="form-group">
-                <label>Monto a cobrar (USDC):</label>
+                <label>Monto a cobrar (tUSDC):</label>
                 <div className="input-with-symbol">
                   <span className="symbol">$</span>
                   <input
-                    type="number"
-                    step="0.10"
-                    min="0.10"
+                    type="text"
+                    inputMode="decimal"
                     value={amountInput}
                     onChange={(e) => setAmountInput(e.target.value)}
                     className="input-text input-large"
                     required
                   />
                 </div>
+                <div className="preset-chips">
+                  {PRESET_AMOUNTS.map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      className={`preset-chip ${amountInput === preset ? 'active' : ''}`}
+                      onClick={() => setAmountInput(preset)}
+                    >
+                      ${preset}
+                    </button>
+                  ))}
+                </div>
               </div>
 
               <div className="btn-group">
                 <button type="submit" className="btn btn-primary btn-block">
-                  <QrCode size={18} /> Generar QR-A (Cobrar)
+                  <QrCode size={18} /> Generar QR-A
                 </button>
                 <button
                   type="button"
                   className="btn btn-action-pay"
                   onClick={() => setScanningQRB(true)}
                 >
-                  <Camera size={18} /> Escanear Vale (QR-B)
+                  <Camera size={18} /> Leer QR-B
                 </button>
               </div>
             </form>
@@ -321,21 +566,33 @@ export default function ComercioScreen() {
           {generatedQRA && (
             <div className="card qra-card">
               <div className="card-header">
-                <h3>QR de Cobro</h3>
-                <p>Pide al cliente que escanee este código con su app:</p>
-                <h2 className="charge-amount">{amountInput} USDC</h2>
+                <h3>QR de Cobro (QR-A)</h3>
+                <p>Pide al cliente que escanee este código (funciona sin internet):</p>
+                <h2 className="charge-amount">
+                  {expectedChargeUnits ? formatStroops(expectedChargeUnits) : amountInput} tUSDC
+                </h2>
               </div>
 
               <div className="qr-wrapper">
                 <QRCodeSVG value={generatedQRA} size={220} level="M" />
               </div>
 
-              <button
-                className="btn btn-primary btn-block"
-                onClick={() => setScanningQRB(true)}
-              >
-                <Camera size={18} /> Escanear el Vale del Cliente
-              </button>
+              <div className="btn-group">
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => handleCopy(generatedQRA, 'qra-code')}
+                >
+                  {copiedId === 'qra-code' ? <Check size={16} /> : <Copy size={16} />}
+                  {copiedId === 'qra-code' ? 'Copiado' : 'Copiar QR-A'}
+                </button>
+                <button
+                  className="btn btn-primary btn-block"
+                  onClick={() => setScanningQRB(true)}
+                >
+                  <Camera size={18} /> Escanear Vale (QR-B)
+                </button>
+              </div>
             </div>
           )}
 
@@ -349,7 +606,7 @@ export default function ComercioScreen() {
             />
           )}
 
-          {/* Queue of vouchers */}
+          {/* Voucher Queue */}
           <div className="card">
             <div className="history-header">
               <Clock size={18} />
@@ -361,40 +618,59 @@ export default function ComercioScreen() {
             ) : (
               <ul className="queue-list">
                 {queue.map((v) => (
-                  <li key={v.id} className="queue-item">
-                    <div className="queue-item-info">
-                      <span className="item-amount">+{formatUSDC(v.amount)} USDC</span>
-                      <span className="item-client">
-                        De: {v.signer.slice(0, 6)}...{v.signer.slice(-4)}
-                      </span>
-                      <span className="item-date">
-                        {new Date(v.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                      </span>
+                  <li key={v.id} className="queue-item queue-item-col">
+                    <div className="queue-item-top">
+                      <div className="queue-item-info">
+                        <span className="item-amount">+{formatStroops(v.amount)} tUSDC</span>
+                        <span className="item-client">
+                          De: {v.signer.slice(0, 6)}...{v.signer.slice(-4)} ·{' '}
+                          {new Date(v.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                      </div>
+
+                      <div className="queue-item-status">
+                        <span className={`status-badge status-${v.status}`}>
+                          {v.status === 'pendiente' && 'Pendiente de liquidar'}
+                          {v.status === 'liquidado' && 'Liquidado en Stellar'}
+                          {v.status === 'rechazado' && 'Rechazado'}
+                        </span>
+                        {v.txHash && (
+                          <a
+                            href={`${TESTNET_CONFIG.explorerBase}/tx/${v.txHash}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="link-explorer"
+                            title="Ver transacción en stellar.expert"
+                          >
+                            <ExternalLink size={13} /> Ver tx
+                          </a>
+                        )}
+                      </div>
                     </div>
 
-                    <div className="queue-item-status">
-                      <span className={`status-badge status-${v.status}`}>
-                        {v.status === 'pendiente' && 'Pendiente de liquidar'}
-                        {v.status === 'liquidado' && 'Liquidado en Stellar'}
-                        {v.status === 'rechazado' && 'Rechazado'}
-                      </span>
-                      {v.txHash && (
-                        <a
-                          href={`https://stellar.expert/explorer/testnet/tx/${v.txHash}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="link-explorer"
-                          title="Ver en stellar.expert"
+                    {v.status === 'rechazado' && v.error && (
+                      <div className="voucher-error-row">
+                        <span className="voucher-error-text">{v.error}</span>
+                        <button
+                          type="button"
+                          className="btn-chip"
+                          onClick={() => handleRetryVoucher(v.id)}
+                          disabled={syncing}
                         >
-                          <ExternalLink size={14} /> Ver tx
-                        </a>
-                      )}
-                    </div>
+                          Reintentar
+                        </button>
+                      </div>
+                    )}
                   </li>
                 ))}
               </ul>
             )}
           </div>
+
+          <p className="disclaimer-note">
+            El relayer patrocina las comisiones de red al liquidar (fee sponsorship). Asegurado hasta el monto apartado en
+            la bóveda del cliente.
+          </p>
         </>
       )}
     </div>

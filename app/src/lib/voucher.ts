@@ -5,6 +5,7 @@ import {
   verifySignature,
   publicKeyToStrKey,
   strKeyToPublicKey,
+  formatStroops,
 } from './stellar';
 import { base64urlEncode, base64urlDecode, generateNonce, generateRequestId } from './qr';
 
@@ -190,7 +191,7 @@ export function verifyVoucherLocally(
   if (expectedAmount !== undefined && payload.amount !== expectedAmount) {
     return {
       valid: false,
-      error: `El monto (${payload.amount}) no coincide con el cobrado (${expectedAmount})`,
+      error: `El monto del vale (${formatStroops(payload.amount)} tUSDC) no coincide con el cobro (${formatStroops(expectedAmount)} tUSDC)`,
     };
   }
 

@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import ClienteScreen from './screens/cliente';
 import ComercioScreen from './screens/comercio';
-import { Wifi, WifiOff, User, Store, Shield } from 'lucide-react';
+import { TESTNET_CONFIG } from './lib/stellar';
+import { Wifi, WifiOff, User, Store, Shield, ExternalLink } from 'lucide-react';
 import './App.css';
 
 export default function App() {
@@ -43,7 +44,7 @@ export default function App() {
             </>
           ) : (
             <>
-              <WifiOff size={14} /> Sin conexión (Modo Avión)
+              <WifiOff size={14} /> Sin conexión
             </>
           )}
         </div>
@@ -75,7 +76,16 @@ export default function App() {
 
       {/* Footer */}
       <footer className="app-footer">
-        <span>Stellar Testnet · Soroban Smart Contract</span>
+        <span>Stellar Testnet · Contrato Soroban </span>
+        <a
+          href={`${TESTNET_CONFIG.explorerBase}/contract/${TESTNET_CONFIG.contractId}`}
+          target="_blank"
+          rel="noreferrer"
+          className="link-explorer"
+        >
+          {TESTNET_CONFIG.contractId.slice(0, 6)}...{TESTNET_CONFIG.contractId.slice(-4)}{' '}
+          <ExternalLink size={11} />
+        </a>
       </footer>
     </div>
   );

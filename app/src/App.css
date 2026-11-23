@@ -650,3 +650,248 @@ body {
 @keyframes spin {
   100% { transform: rotate(360deg); }
 }
+
+/* Additional polish for real testnet UX */
+.alert {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.alert-body {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.alert-link {
+  margin-left: 0;
+}
+
+.address-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.btn-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: #f8fafc;
+  color: var(--text);
+  font-family: monospace;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.btn-chip:hover {
+  background: #e2e8f0;
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--primary);
+  border: 1px solid var(--border);
+}
+
+.btn-ghost:hover {
+  background: #f1f5f9;
+}
+
+.wallet-balance-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.wallet-balance-val {
+  font-size: 1.35rem;
+  font-weight: 800;
+  color: var(--text);
+}
+
+.wallet-balance-val small {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.wallet-btn-col {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-end;
+}
+
+.helper-warn {
+  margin-top: 10px;
+  margin-bottom: 0;
+  color: #b45309;
+  background: #fef3c7;
+  padding: 8px 10px;
+  border-radius: 6px;
+}
+
+.vault-countdown {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--warning);
+  margin-top: 2px;
+}
+
+.inline-topup-form {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.inline-topup-form .input-text {
+  flex: 1;
+}
+
+.merchant-stats-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.stat-card {
+  background: #f8fafc;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.stat-value-sm {
+  font-size: 1.2rem;
+  font-weight: 800;
+  color: var(--primary);
+}
+
+.stat-value-sm.pending-val {
+  color: #b45309;
+}
+
+.stat-value-sm small {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.activation-card {
+  border-color: #f59e0b;
+  background: #fffbeb;
+}
+
+.alert-ok-card {
+  border-color: #86efac;
+  background: #f0fdf4;
+}
+
+.alert-warning-card {
+  border-color: #fcd34d;
+  background: #fffbeb;
+}
+
+.preset-chips {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.preset-chip {
+  flex: 1;
+  padding: 6px 4px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #f8fafc;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.preset-chip.active {
+  background: var(--primary-light);
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.queue-item-col {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.queue-item-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.queue-item-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.queue-item-status {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.voucher-error-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+
+.voucher-error-text {
+  font-size: 0.76rem;
+  color: #b91c1c;
+}
+
+.history-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.history-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.disclaimer-note {
+  font-size: 0.73rem;
+  color: var(--text-muted);
+  text-align: center;
+  margin-top: 8px;
+  line-height: 1.4;
+}
+
+.warn-line {
+  font-size: 0.78rem;
+  color: #b45309;
+  font-weight: 600;
+}
+
+.mt-6 { margin-top: 6px; }
+.mt-10 { margin-top: 10px; }
+.mb-0 { margin-bottom: 0; }
+.text-center { text-align: center; }

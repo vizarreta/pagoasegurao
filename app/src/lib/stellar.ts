@@ -1,7 +1,86 @@
-import { Keypair, Address, StrKey, Networks } from '@stellar/stellar-sdk';
+import {
+  Keypair,
+  Address,
+  Asset,
+  StrKey,
+  Networks,
+  Operation,
+  TransactionBuilder,
+  rpc,
+  xdr,
+  nativeToScVal,
+} from '@stellar/stellar-sdk';
+import testnetDeployment from '../../public/deployments/testnet.json';
 
 export const NETWORK_PASSPHRASE = Networks.TESTNET;
-export const RPC_URL = 'https://soroban-testnet.stellar.org';
+export const RPC_URL = testnetDeployment.rpcUrl || 'https://soroban-testnet.stellar.org';
+export const HORIZON_URL = testnetDeployment.horizonUrl || 'https://horizon-testnet.stellar.org';
+
+export const TESTNET_CONFIG = {
+  networkPassphrase: NETWORK_PASSPHRASE,
+  rpcUrl: RPC_URL,
+  horizonUrl: HORIZON_URL,
+  assetCode: testnetDeployment.assetCode || 'tUSDC',
+  issuer: testnetDeployment.issuer,
+  tUsdcContractId: testnetDeployment.tUsdcContractId || testnetDeployment.usdcContractId,
+  contractId: testnetDeployment.contractId,
+  relayerAccount: testnetDeployment.relayerAccount,
+  explorerBase: 'https://stellar.expert/explorer/testnet',
+};
+
+const CONTRACT_ERROR_MAP: Record<number, string> = {
+  1: 'Este vale ya fue liquidado anteriormente (doble canje evitado).',
+  2: 'El vale ha vencido o supera la fecha límite de la bóveda.',
+  3: 'El monto es inválido o supera el tope por vale.',
+  4: 'Saldo insuficiente en la bóveda.',
+  5: 'No se encontró una bóveda activa en Stellar.',
+  6: 'La bóveda aún no vence; podrás cerrarla al llegar la fecha límite.',
+  7: 'Ya existe una bóveda activa para esta cuenta.',
+  8: 'Firma criptográfica inválida.',
+  9: 'No tienes autorización para modificar esta bóveda.',
+  10: 'La fecha de vencimiento debe ser futura.',
+};
+
+export function mapSorobanError(raw: string): string {
+  const match = raw.match(/Error\(Contract,\s*#(\d+)\)/i);
+  if (match) {
+    const code = Number(match[1]);
+    return CONTRACT_ERROR_MAP[code] || `Error del contrato Soroban (#${code}).`;
+  }
+  if (/insufficient balance|underfunded|op_underfunded/i.test(raw)) {
+    return 'Saldo insuficiente de tUSDC en tu cuenta para apartar ese monto.';
+  }
+  if (/trustline|op_no_trust/i.test(raw)) {
+    return 'Primero activa tu cuenta para crear la línea de confianza de tUSDC.';
+  }
+  return raw;
+}
+
+/**
+ * Parses a decimal string like "12.5" or "12,50" into exact 7-decimal stroops (BigInt) without floats.
+ */
+export function parseTusdcToStroops(input: string): bigint | null {
+  const normalized = input.trim().replace(',', '.');
+  if (!/^\d+(\.\d{1,7})?$/.test(normalized)) return null;
+  const [wholeStr, fracStr = ''] = normalized.split('.');
+  const paddedFrac = fracStr.padEnd(7, '0');
+  const total = BigInt(wholeStr) * 10_000_000n + BigInt(paddedFrac);
+  return total > 0n ? total : null;
+}
+
+/**
+ * Formats 7-decimal stroops (BigInt or numeric string) cleanly with 2 decimals (no float rounding issues).
+ */
+export function formatStroops(stroops: string | bigint | number): string {
+  const val = typeof stroops === 'bigint' ? stroops : BigInt(stroops);
+  const negative = val < 0n;
+  const abs = negative ? -val : val;
+  const whole = abs / 10_000_000n;
+  const frac = (abs % 10_000_000n).toString().padStart(7, '0');
+  const twoDec = frac.slice(0, 2);
+  const extra = frac.slice(2).replace(/0+$/, '');
+  return `${negative ? '-' : ''}${whole}.${twoDec}${extra}`;
+}
 
 export function keypairFromSecret(secret: string): Keypair {
   return Keypair.fromSecret(secret);
@@ -79,4 +158,215 @@ export function verifySignature(
   } catch {
     return false;
   }
+}
+
+export interface AccountBalances {
+  exists: boolean;
+  xlm: string;
+  tUsdc: string;
+  hasTrustline: boolean;
+}
+
+export async function fetchAccountBalances(publicKey: string): Promise<AccountBalances> {
+  const res = await fetch(`${TESTNET_CONFIG.horizonUrl}/accounts/${publicKey}`);
+  if (res.status === 404) {
+    return { exists: false, xlm: '0', tUsdc: '0', hasTrustline: false };
+  }
+  if (!res.ok) {
+    throw new Error(`Horizon error (${res.status})`);
+  }
+  const data = (await res.json()) as {
+    balances: Array<{ asset_type: string; asset_code?: string; asset_issuer?: string; balance: string }>;
+  };
+  const native = data.balances.find((b) => b.asset_type === 'native');
+  const token = data.balances.find(
+    (b) => b.asset_code === TESTNET_CONFIG.assetCode && b.asset_issuer === TESTNET_CONFIG.issuer
+  );
+  return {
+    exists: true,
+    xlm: native ? native.balance : '0',
+    tUsdc: token ? token.balance : '0',
+    hasTrustline: Boolean(token),
+  };
+}
+
+async function waitForTx(server: rpc.Server, hash: string): Promise<string> {
+  for (let i = 0; i < 40; i++) {
+    await new Promise((r) => setTimeout(r, 1500));
+    const txStatus = await server.getTransaction(hash);
+    if (txStatus.status === rpc.Api.GetTransactionStatus.SUCCESS) {
+      return hash;
+    }
+    if (txStatus.status === rpc.Api.GetTransactionStatus.FAILED) {
+      throw new Error(`La transacción falló en Stellar Testnet (tx: ${hash}).`);
+    }
+  }
+  throw new Error(`Tiempo de espera agotado confirmando la transacción (${hash}).`);
+}
+
+export async function ensureTrustlineOnChain(keypair: Keypair): Promise<string | null> {
+  const bal = await fetchAccountBalances(keypair.publicKey());
+  if (bal.hasTrustline) return null;
+
+  const server = new rpc.Server(TESTNET_CONFIG.rpcUrl);
+  const account = await server.getAccount(keypair.publicKey());
+  const asset = new Asset(TESTNET_CONFIG.assetCode, TESTNET_CONFIG.issuer);
+
+  const tx = new TransactionBuilder(account, {
+    fee: '10000',
+    networkPassphrase: TESTNET_CONFIG.networkPassphrase,
+  })
+    .addOperation(Operation.changeTrust({ asset, limit: '1000000' }))
+    .setTimeout(60)
+    .build();
+
+  tx.sign(keypair);
+  const sendRes = await server.sendTransaction(tx);
+  if (sendRes.status === 'ERROR') {
+    throw new Error('No se pudo crear la línea de confianza (trustline) de tUSDC en testnet.');
+  }
+  return waitForTx(server, sendRes.hash);
+}
+
+export async function activateAccountWithFaucet(
+  keypair: Keypair,
+  mintTusdc: boolean
+): Promise<{
+  balances: AccountBalances;
+  txHash?: string;
+  message: string;
+}> {
+  // Step 1: Ask backend faucet to fund XLM via Friendbot (and mint tUSDC if trustline already exists)
+  const res1 = await fetch('/api/faucet', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ account: keypair.publicKey(), mintTusdc }),
+  });
+  const data1 = await res1.json();
+  if (!res1.ok || !data1.ok) {
+    throw new Error(data1.error || 'No se pudo contactar al faucet de Stellar Testnet.');
+  }
+
+  // Step 2: Establish tUSDC trustline signed by the device keypair if missing
+  if (!data1.hasTrustline) {
+    await ensureTrustlineOnChain(keypair);
+  }
+
+  // Step 3: If client requested tUSDC and hadn't received it yet, request mint now
+  if (mintTusdc && !data1.fundedTusdc) {
+    const res2 = await fetch('/api/faucet', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ account: keypair.publicKey(), mintTusdc: true }),
+    });
+    const data2 = await res2.json();
+    if (!res2.ok || !data2.ok) {
+      throw new Error(data2.error || 'Error enviando tUSDC de prueba.');
+    }
+    const balances = await fetchAccountBalances(keypair.publicKey());
+    return {
+      balances,
+      txHash: data2.hash,
+      message: data2.message || '¡100 tUSDC de prueba acreditados en Stellar Testnet!',
+    };
+  }
+
+  const balances = await fetchAccountBalances(keypair.publicKey());
+  return {
+    balances,
+    txHash: data1.hash,
+    message: data1.message || 'Cuenta activa y lista en Stellar Testnet.',
+  };
+}
+
+async function submitSorobanContractCall(
+  keypair: Keypair,
+  functionName: string,
+  args: xdr.ScVal[]
+): Promise<string> {
+  const server = new rpc.Server(TESTNET_CONFIG.rpcUrl);
+  const account = await server.getAccount(keypair.publicKey());
+
+  const tx = new TransactionBuilder(account, {
+    fee: '100000',
+    networkPassphrase: TESTNET_CONFIG.networkPassphrase,
+  })
+    .addOperation(
+      Operation.invokeContractFunction({
+        contract: TESTNET_CONFIG.contractId,
+        function: functionName,
+        args,
+      })
+    )
+    .setTimeout(60)
+    .build();
+
+  const sim = await server.simulateTransaction(tx);
+  if (rpc.Api.isSimulationError(sim)) {
+    throw new Error(mapSorobanError(sim.error || 'Error en simulación de Soroban'));
+  }
+
+  const prepared = await server.prepareTransaction(tx);
+  prepared.sign(keypair);
+  const sendRes = await server.sendTransaction(prepared);
+  if (sendRes.status === 'ERROR') {
+    throw new Error('Stellar Testnet rechazó la transacción. Intenta nuevamente.');
+  }
+
+  return waitForTx(server, sendRes.hash);
+}
+
+export async function openVaultOnChain(
+  keypair: Keypair,
+  amountStroops: bigint,
+  expiresAtSec: number,
+  maxPerVoucherStroops: bigint
+): Promise<string> {
+  const signerBytes = strKeyToPublicKey(keypair.publicKey());
+  return submitSorobanContractCall(keypair, 'open_vault', [
+    Address.fromString(keypair.publicKey()).toScVal(),
+    xdr.ScVal.scvBytes(Buffer.from(signerBytes)),
+    nativeToScVal(amountStroops, { type: 'i128' }),
+    nativeToScVal(BigInt(expiresAtSec), { type: 'u64' }),
+    nativeToScVal(maxPerVoucherStroops, { type: 'i128' }),
+  ]);
+}
+
+export async function topUpVaultOnChain(keypair: Keypair, amountStroops: bigint): Promise<string> {
+  const signerBytes = strKeyToPublicKey(keypair.publicKey());
+  return submitSorobanContractCall(keypair, 'top_up', [
+    Address.fromString(keypair.publicKey()).toScVal(),
+    xdr.ScVal.scvBytes(Buffer.from(signerBytes)),
+    nativeToScVal(amountStroops, { type: 'i128' }),
+  ]);
+}
+
+export async function closeVaultOnChain(keypair: Keypair): Promise<string> {
+  const signerBytes = strKeyToPublicKey(keypair.publicKey());
+  return submitSorobanContractCall(keypair, 'close_vault', [
+    Address.fromString(keypair.publicKey()).toScVal(),
+    xdr.ScVal.scvBytes(Buffer.from(signerBytes)),
+  ]);
+}
+
+export interface RemoteVaultResponse {
+  ok: boolean;
+  exists: boolean;
+  vault: {
+    owner: string;
+    balance: string;
+    expiresAt: number;
+    maxPerVoucher: string;
+  } | null;
+  balances: AccountBalances;
+  syncedAt: number;
+}
+
+export async function fetchVaultFromRelayer(signerPublicKey: string): Promise<RemoteVaultResponse> {
+  const res = await fetch(`/api/vault/${encodeURIComponent(signerPublicKey)}`);
+  const data = await res.json();
+  if (!res.ok || !data.ok) {
+    throw new Error(data.error || 'No se pudo consultar la bóveda en Stellar Testnet.');
+  }
+  return data as RemoteVaultResponse;
 }
