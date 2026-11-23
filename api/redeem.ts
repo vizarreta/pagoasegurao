@@ -15,7 +15,7 @@ import {
   fetchHorizonBalances,
   waitForTransaction,
   checkIsRedeemedOnChain,
-} from './_config';
+} from './_config.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader('Access-Control-Allow-Origin', '*');

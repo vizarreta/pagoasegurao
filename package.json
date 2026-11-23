@@ -2,6 +2,8 @@
   "name": "pagoasegurao",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
+  "packageManager": "pnpm@9.15.9",
   "scripts": {
     "setup:testnet": "tsx scripts/setup-testnet.ts",
     "verify:vector": "tsx scripts/verify-vector.ts",

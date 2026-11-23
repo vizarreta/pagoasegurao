@@ -1,6 +1,6 @@
 import { VercelRequest, VercelResponse } from '@vercel/node';
 import { Keypair, Asset, TransactionBuilder, Operation, rpc, StrKey } from '@stellar/stellar-sdk';
-import { getConfig, fetchHorizonBalances, waitForTransaction, ASSET_CODE } from './_config';
+import { getConfig, fetchHorizonBalances, waitForTransaction, ASSET_CODE } from './_config.js';
 
 const rateLimitMap = new Map<string, number>();
 const COOLDOWN_MS = 10_000;

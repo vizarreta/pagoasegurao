@@ -47,9 +47,9 @@
   - `close_vault` (devolución +30 tUSDC): [tx `204ef56b...`](https://stellar.expert/explorer/testnet/tx/204ef56b48b249f6afa2ae7f2951222b1ef03eaf2c61f19e172ace05b3b80094)
   - Rechazos verificados en español: doble canje (`#1`), tope excedido (`#3`), vale vencido (`#2`), firma alterada (`#8`), cierre anticipado (`#6`).
 
-### Fase 6 — Entrega Final: EN PROGRESO (pendientes manuales del equipo)
+### Fase 6 — Entrega Final: CASI LISTA (solo falta video demo y trámites de registro)
 - [x] README completo, arquitectura, transparencia de IA, pruebas y contratos reales verificados en `stellar.expert`.
+- [x] Despliegue público HTTPS en Vercel verificado en vivo: https://pagoasegurao.vercel.app (PWA + Service Worker + `/api/faucet`, `/api/vault/:signer` y `/api/redeem` reales).
 - [ ] Completar usuario de GitHub de Gustavo Alexander Flores Vera en `README.md`.
-- [ ] Iniciar sesión en Vercel y publicar despliegue HTTPS con variables `RELAYER_SECRET` e `ISSUER_SECRET`.
 - [ ] Grabar video demo de máximo 3 minutos (siguiendo `docs/demo-script.md`) y pegar enlace en `README.md`.
 - [ ] Registrar el repositorio en Stellar Build Hub (hasta miércoles 25 nov, 11:59 p. m.) y entregar en APEX (hasta viernes 4 dic, 11:59 p. m.).

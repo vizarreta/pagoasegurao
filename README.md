@@ -186,8 +186,9 @@ Valida en vivo: onboarding cliente y comercio (`/api/faucet` + trustline `tUSDC`
 
 ## 10. Entregables y enlaces
 
+- **App desplegada (HTTPS / PWA en producción):** https://pagoasegurao.vercel.app
 - **Repositorio público:** https://github.com/vizarreta/pagoasegurao
-- **App desplegada (HTTPS / PWA):** *(pendiente de activar despliegue en Vercel)*
+- **Contrato en Stellar Testnet:** https://stellar.expert/explorer/testnet/contract/CD2XXTNNXVP2VCYL2RID4EIQCCADQPM24ZENU6CZAHJ4DAZJAQEZML5O
 - **Video demo (máx. 3 min):** *(pendiente de grabar — guion listo en [`docs/demo-script.md`](docs/demo-script.md))*
 
 ---

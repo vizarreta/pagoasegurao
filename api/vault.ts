@@ -8,7 +8,7 @@ import {
   xdr,
   scValToNative,
 } from '@stellar/stellar-sdk';
-import { getConfig, fetchHorizonBalances, DEFAULT_RELAYER_PUBLIC } from './_config';
+import { getConfig, fetchHorizonBalances, DEFAULT_RELAYER_PUBLIC } from './_config.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader('Access-Control-Allow-Origin', '*');
