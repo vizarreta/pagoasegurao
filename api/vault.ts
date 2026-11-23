@@ -1,27 +1,93 @@
 import { VercelRequest, VercelResponse } from '@vercel/node';
-import { Address, StrKey, rpc, Operation, xdr, Networks } from '@stellar/stellar-sdk';
-
-const RPC_URL = process.env.STELLAR_RPC_URL || 'https://soroban-testnet.stellar.org';
-const CONTRACT_ID = process.env.CONTRACT_ID || 'CAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQC526';
+import {
+  Account,
+  StrKey,
+  rpc,
+  Operation,
+  TransactionBuilder,
+  xdr,
+  scValToNative,
+} from '@stellar/stellar-sdk';
+import { getConfig, fetchHorizonBalances, DEFAULT_RELAYER_PUBLIC } from './_config';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  if (req.method === 'OPTIONS') return res.status(204).end();
+  if (req.method !== 'GET') return res.status(405).json({ ok: false, error: 'Método no permitido' });
+
   const { signer } = req.query as { signer?: string };
-  if (!signer) return res.status(400).json({ error: 'signer requerido' });
+  if (!signer || !StrKey.isValidEd25519PublicKey(signer)) {
+    return res.status(400).json({ ok: false, error: 'Parámetro signer (clave G...) inválido o faltante.' });
+  }
 
   try {
-    const server = new rpc.Server(RPC_URL);
+    const config = getConfig();
+    const server = new rpc.Server(config.rpcUrl);
     const signerBytes = StrKey.decodeEd25519PublicKey(signer);
-    const signerScVal = xdr.ScVal.scvBytes(signerBytes);
 
-    // Consulta de bóveda
-    return res.json({
+    // Pure read simulation against Soroban get_vault(signer)
+    const dummySource = new Account(DEFAULT_RELAYER_PUBLIC, '0');
+    const tx = new TransactionBuilder(dummySource, {
+      fee: '100',
+      networkPassphrase: config.networkPassphrase,
+    })
+      .addOperation(
+        Operation.invokeContractFunction({
+          contract: config.contractId,
+          function: 'get_vault',
+          args: [xdr.ScVal.scvBytes(signerBytes)],
+        })
+      )
+      .setTimeout(30)
+      .build();
+
+    const [simRes, balances] = await Promise.all([
+      server.simulateTransaction(tx),
+      fetchHorizonBalances(signer, config.tUsdcIssuer, config.horizonUrl),
+    ]);
+
+    if (rpc.Api.isSimulationError(simRes) || !simRes.result) {
+      return res.status(502).json({
+        ok: false,
+        error: 'No se pudo consultar el estado de la bóveda en Soroban.',
+        details: rpc.Api.isSimulationError(simRes) ? simRes.error : undefined,
+      });
+    }
+
+    const decoded = scValToNative(simRes.result.retval);
+    if (!decoded) {
+      return res.status(200).json({
+        ok: true,
+        signer,
+        contractId: config.contractId,
+        exists: false,
+        vault: null,
+        balances,
+        syncedAt: Date.now(),
+      });
+    }
+
+    return res.status(200).json({
+      ok: true,
       signer,
+      contractId: config.contractId,
       exists: true,
-      contractId: CONTRACT_ID,
-      note: 'Bóveda activa en contrato Soroban',
+      vault: {
+        owner: String(decoded.owner),
+        balance: BigInt(decoded.balance).toString(),
+        expiresAt: Number(decoded.expires_at),
+        maxPerVoucher: BigInt(decoded.max_per_voucher).toString(),
+      },
+      balances,
+      syncedAt: Date.now(),
     });
   } catch (err: any) {
-    return res.status(500).json({ error: err.message || 'Error al consultar bóveda' });
+    return res.status(500).json({
+      ok: false,
+      error: err?.message || 'Error al consultar la bóveda en Stellar Testnet.',
+    });
   }
 }

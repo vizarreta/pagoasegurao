@@ -3,28 +3,19 @@ import {
   Keypair,
   Address,
   TransactionBuilder,
-  Networks,
   Operation,
   rpc,
   xdr,
   StrKey,
+  nativeToScVal,
 } from '@stellar/stellar-sdk';
-import { buildCanonicalMessage } from '../app/src/lib/stellar';
-
-const RPC_URL = process.env.STELLAR_RPC_URL || 'https://soroban-testnet.stellar.org';
-const NETWORK_PASSPHRASE = Networks.TESTNET;
-const CONTRACT_ID = process.env.CONTRACT_ID || 'CAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQC526';
-
-const ERROR_MAP: Record<number, string> = {
-  1: 'Este vale ya fue canjeado anteriormente (doble canje evitado)',
-  2: 'El vale ha vencido o la bóveda ya no está activa',
-  3: 'El monto del vale es inválido o supera el tope autorizado',
-  4: 'Saldo insuficiente en la bóveda del cliente',
-  5: 'Bóveda no encontrada para este cliente',
-  6: 'La bóveda aún no vence',
-  7: 'Ya existe una bóveda activa para esta cuenta',
-  8: 'Firma criptográfica inválida (el vale fue alterado)',
-};
+import {
+  getConfig,
+  parseContractError,
+  fetchHorizonBalances,
+  waitForTransaction,
+  checkIsRedeemedOnChain,
+} from './_config';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -35,108 +26,178 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(204).end();
   }
   if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Método no permitido' });
+    return res.status(405).json({ ok: false, error: 'Método no permitido' });
   }
 
   try {
-    const { voucher, signature } = req.body as {
-      voucher: {
+    const config = getConfig();
+    if (!config.relayerSecret) {
+      return res.status(500).json({
+        ok: false,
+        error: 'El relayer no tiene configurada la variable RELAYER_SECRET en el servidor.',
+      });
+    }
+
+    const { voucher, signature } = (req.body || {}) as {
+      voucher?: {
         signer: string;
         merchant: string;
         amount: string;
         nonce: string;
         expiry: string;
       };
-      signature: string;
+      signature?: string;
     };
 
     if (!voucher || !signature) {
-      return res.status(400).json({ error: 'Faltan los datos del vale o la firma criptográfica' });
+      return res.status(400).json({ ok: false, error: 'Faltan los datos del vale o la firma criptográfica.' });
     }
 
-    const relayerSecret = process.env.RELAYER_SECRET;
-    let relayerKp: Keypair;
-    if (relayerSecret) {
-      relayerKp = Keypair.fromSecret(relayerSecret);
-    } else {
-      // Ephemeral relayer for demo
-      relayerKp = Keypair.random();
+    if (!StrKey.isValidEd25519PublicKey(voucher.signer)) {
+      return res.status(400).json({ ok: false, error: 'Clave pública del cliente inválida.' });
+    }
+    if (!StrKey.isValidEd25519PublicKey(voucher.merchant)) {
+      return res.status(400).json({ ok: false, error: 'Dirección del comercio inválida.' });
+    }
+    if (!/^[0-9a-fA-F]{128}$/.test(signature)) {
+      return res.status(400).json({ ok: false, error: 'Formato de firma Ed25519 inválido (se esperan 64 bytes hex).' });
     }
 
-    // Convert types for Soroban invocation
-    const signerBytes = StrKey.decodeEd25519PublicKey(voucher.signer);
-    const signerScVal = xdr.ScVal.scvBytes(signerBytes);
-    const merchantScVal = Address.fromString(voucher.merchant).toScVal();
-    const amountScVal = xdr.ScVal.scvI128(
-      new xdr.Int128Parts({
-        hi: xdr.Int64.fromString('0'),
-        lo: xdr.Uint64.fromString(voucher.amount),
-      })
+    let amountBig: bigint;
+    let nonceBig: bigint;
+    let expiryBig: bigint;
+    try {
+      amountBig = BigInt(voucher.amount);
+      nonceBig = BigInt(voucher.nonce);
+      expiryBig = BigInt(voucher.expiry);
+    } catch {
+      return res.status(400).json({ ok: false, error: 'Monto, nonce o fecha de vencimiento inválidos.' });
+    }
+
+    if (amountBig <= 0n) {
+      return res.status(400).json({ ok: false, error: 'El monto del vale debe ser mayor a cero.' });
+    }
+
+    const relayerKp = Keypair.fromSecret(config.relayerSecret);
+    const server = new rpc.Server(config.rpcUrl);
+
+    // Idempotency check: inspect if already redeemed on-chain
+    const alreadyRedeemed = await checkIsRedeemedOnChain(
+      server,
+      config.contractId,
+      voucher.signer,
+      nonceBig,
+      relayerKp.publicKey()
     );
-    const nonceScVal = xdr.ScVal.scvU64(xdr.Uint64.fromString(voucher.nonce));
-    const expiryScVal = xdr.ScVal.scvU64(xdr.Uint64.fromString(voucher.expiry));
+    if (alreadyRedeemed) {
+      return res.status(409).json({
+        ok: false,
+        code: 1,
+        alreadyRedeemed: true,
+        error: 'Este vale ya fue liquidado anteriormente en Stellar (doble canje evitado).',
+      });
+    }
 
+    // Verify merchant account exists and has tUSDC trustline before submitting
+    const merchantInfo = await fetchHorizonBalances(voucher.merchant, config.tUsdcIssuer, config.horizonUrl);
+    if (!merchantInfo.exists) {
+      return res.status(400).json({
+        ok: false,
+        error: 'La cuenta del comercio todavía no existe en Stellar Testnet. Actívala en el botón "Activar cuenta de comercio".',
+      });
+    }
+    if (!merchantInfo.hasTrustline) {
+      return res.status(400).json({
+        ok: false,
+        error: 'La cuenta del comercio aún no activó tUSDC (trustline). Actívala en el Modo Comercio y vuelve a sincronizar.',
+      });
+    }
+
+    // Build Soroban Voucher struct ScVal (alphabetical keys required by Soroban)
+    const signerBytes = StrKey.decodeEd25519PublicKey(voucher.signer);
     const voucherScVal = xdr.ScVal.scvMap([
-      new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol('amount'), val: amountScVal }),
-      new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol('expiry'), val: expiryScVal }),
-      new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol('merchant'), val: merchantScVal }),
-      new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol('nonce'), val: nonceScVal }),
-      new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol('signer'), val: signerScVal }),
+      new xdr.ScMapEntry({
+        key: xdr.ScVal.scvSymbol('amount'),
+        val: nativeToScVal(amountBig, { type: 'i128' }),
+      }),
+      new xdr.ScMapEntry({
+        key: xdr.ScVal.scvSymbol('expiry'),
+        val: nativeToScVal(expiryBig, { type: 'u64' }),
+      }),
+      new xdr.ScMapEntry({
+        key: xdr.ScVal.scvSymbol('merchant'),
+        val: Address.fromString(voucher.merchant).toScVal(),
+      }),
+      new xdr.ScMapEntry({
+        key: xdr.ScVal.scvSymbol('nonce'),
+        val: nativeToScVal(nonceBig, { type: 'u64' }),
+      }),
+      new xdr.ScMapEntry({
+        key: xdr.ScVal.scvSymbol('signer'),
+        val: xdr.ScVal.scvBytes(signerBytes),
+      }),
     ]);
 
     const sigBytes = Buffer.from(signature, 'hex');
-    const signatureScVal = xdr.ScVal.scvBytes(sigBytes);
-
-    const server = new rpc.Server(RPC_URL);
-
-    // Build redeem operation
     const redeemOp = Operation.invokeContractFunction({
-      contract: CONTRACT_ID,
+      contract: config.contractId,
       function: 'redeem',
-      args: [voucherScVal, signatureScVal],
+      args: [voucherScVal, xdr.ScVal.scvBytes(sigBytes)],
     });
 
-    // Check on testnet
-    try {
-      const relayerAccount = await server.getAccount(relayerKp.publicKey());
-      const tx = new TransactionBuilder(relayerAccount, {
-        fee: '100000',
-        networkPassphrase: NETWORK_PASSPHRASE,
-      })
-        .addOperation(redeemOp)
-        .setTimeout(60)
-        .build();
+    const relayerAccount = await server.getAccount(relayerKp.publicKey());
+    const tx = new TransactionBuilder(relayerAccount, {
+      fee: '100000',
+      networkPassphrase: config.networkPassphrase,
+    })
+      .addOperation(redeemOp)
+      .setTimeout(60)
+      .build();
 
-      const simRes = await server.simulateTransaction(tx);
-      if (rpc.Api.isSimulationError(simRes)) {
-        console.warn('Simulation error:', simRes.error);
-        return res.status(400).json({
-          ok: false,
-          error: 'Error de validación en el contrato',
-          details: simRes.error,
-        });
-      }
-
-      const prepared = await server.prepareTransaction(tx);
-      prepared.sign(relayerKp);
-      const sendRes = await server.sendTransaction(prepared);
-
-      return res.json({
-        ok: true,
-        hash: sendRes.hash,
-        status: sendRes.status,
-      });
-    } catch (netErr: any) {
-      // In offline demo or fallback mode, compute deterministic tx hash
-      const fakeHash = `tx-${voucher.nonce}-${Date.now().toString(16)}`;
-      return res.json({
-        ok: true,
-        hash: fakeHash,
-        simulated: true,
-        note: 'Liquidación registrada con éxito (patrocinio de comisiones relayer)',
+    const simRes = await server.simulateTransaction(tx);
+    if (rpc.Api.isSimulationError(simRes)) {
+      const parsed = parseContractError(simRes.error || '');
+      const status = parsed.code === 1 ? 409 : 400;
+      return res.status(status).json({
+        ok: false,
+        code: parsed.code,
+        alreadyRedeemed: parsed.code === 1,
+        error: parsed.message,
+        details: simRes.error,
       });
     }
+
+    const prepared = await server.prepareTransaction(tx);
+    prepared.sign(relayerKp);
+    const sendRes = await server.sendTransaction(prepared);
+    if (sendRes.status === 'ERROR') {
+      return res.status(502).json({
+        ok: false,
+        error: 'Stellar Testnet rechazó el envío de la transacción. Intenta nuevamente.',
+        details: sendRes.errorResult?.toXDR('base64'),
+      });
+    }
+
+    const finalTx = await waitForTransaction(server, sendRes.hash);
+    if (finalTx.status !== 'SUCCESS') {
+      return res.status(400).json({
+        ok: false,
+        hash: sendRes.hash,
+        error: 'La transacción falló al ejecutarse en Stellar Testnet.',
+      });
+    }
+
+    return res.status(200).json({
+      ok: true,
+      hash: sendRes.hash,
+      status: 'SUCCESS',
+      explorerUrl: `https://stellar.expert/explorer/testnet/tx/${sendRes.hash}`,
+      sponsoredBy: relayerKp.publicKey(),
+    });
   } catch (err: any) {
-    return res.status(500).json({ error: err.message || 'Error interno del relayer' });
+    return res.status(500).json({
+      ok: false,
+      error: err?.message || 'Error interno en el relayer de Stellar Testnet.',
+    });
   }
 }

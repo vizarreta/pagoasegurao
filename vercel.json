@@ -1,0 +1,23 @@
+{
+  "buildCommand": "pnpm --filter pagoasegurao-app build",
+  "outputDirectory": "app/dist",
+  "installCommand": "pnpm install",
+  "rewrites": [
+    {
+      "source": "/api/vault/:signer",
+      "destination": "/api/vault?signer=:signer"
+    },
+    {
+      "source": "/((?!api/|assets/|deployments/|sw\\.js|workbox-|manifest\\.webmanifest|registerSW\\.js|pwa-|favicon).*)",
+      "destination": "/index.html"
+    }
+  ],
+  "headers": [
+    {
+      "source": "/sw.js",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-cache" }
+      ]
+    }
+  ]
+}
