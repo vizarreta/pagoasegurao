@@ -5,6 +5,7 @@
   "scripts": {
     "setup:testnet": "tsx scripts/setup-testnet.ts",
     "verify:vector": "tsx scripts/verify-vector.ts",
+    "test:e2e": "tsx scripts/test-e2e-api.ts",
     "dev": "pnpm --filter pagoasegurao-app dev",
     "build": "pnpm --filter pagoasegurao-app build"
   },
