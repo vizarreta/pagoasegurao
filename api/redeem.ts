@@ -183,7 +183,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
     }
 
-    const finalTx = await waitForTransaction(server, sendRes.hash);
+    let finalTx: { status: 'SUCCESS' | 'FAILED'; hash: string } | null = null;
+    try {
+      finalTx = await waitForTransaction(server, sendRes.hash, 6, 1000);
+    } catch {
+      // Si el ledger tarda más de 6s, devolvemos 202 Accepted con hash para evitar timeout en Vercel
+      return res.status(202).json({
+        ok: true,
+        hash: sendRes.hash,
+        status: 'PENDING',
+        explorerUrl: `https://stellar.expert/explorer/testnet/tx/${sendRes.hash}`,
+        sponsoredBy: relayerKp.publicKey(),
+        message: 'Transacción aceptada por Stellar Testnet; confirmación en curso en el ledger.',
+      });
+    }
+
     if (finalTx.status !== 'SUCCESS') {
       return res.status(400).json({
         ok: false,

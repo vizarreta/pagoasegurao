@@ -129,7 +129,7 @@ impl PagoAsegurao {
     ) {
         owner.require_auth();
 
-        if amount <= 0 || max_per_voucher <= 0 {
+        if amount <= 0 || max_per_voucher <= 0 || max_per_voucher > amount {
             panic_with_error!(&env, Error::InvalidAmount);
         }
 

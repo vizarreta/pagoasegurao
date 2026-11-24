@@ -11,6 +11,8 @@ import {
   topUpVaultOnChain,
   closeVaultOnChain,
   fetchAccountBalances,
+  parseAmountToStroops,
+  formatStroops,
 } from '../app/src/lib/stellar';
 import { encodeQRA, decodeQRA, encodeQRB, decodeQRB, verifyVoucherLocally } from '../app/src/lib/voucher';
 
@@ -239,8 +241,11 @@ async function main() {
   const clientBalBeforeClose = await fetchAccountBalances(clientKp.publicKey());
   const closeTx = await closeVaultOnChain(clientKp);
   const clientBalAfterClose = await fetchAccountBalances(clientKp.publicKey());
-  const refunded = Number(clientBalAfterClose.balance) - Number(clientBalBeforeClose.balance);
-  assert(Math.abs(refunded - 80) < 0.001, `expected 80 tPEN refund, got ${refunded}`);
+  const beforeStroops = parseAmountToStroops(clientBalBeforeClose.balance) ?? 0n;
+  const afterStroops = parseAmountToStroops(clientBalAfterClose.balance) ?? 0n;
+  const refundedStroops = afterStroops - beforeStroops;
+  const expectedRefundStroops = 800_000_000n; // Exact S/ 80.00 tPEN
+  assert(refundedStroops === expectedRefundStroops, `expected 80 tPEN refund, got ${formatStroops(refundedStroops)}`);
   console.log(`   ✓ close_vault confirmado: https://stellar.expert/explorer/testnet/tx/${closeTx}`);
   console.log(`   ✓ Saldo cliente devuelto: S/ ${clientBalBeforeClose.balance} -> S/ ${clientBalAfterClose.balance} (+S/ 80.00 tPEN)\n`);
 

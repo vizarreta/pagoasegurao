@@ -150,7 +150,7 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      buffer: 'buffer/',
+      buffer: 'buffer',
     },
   },
   build: {

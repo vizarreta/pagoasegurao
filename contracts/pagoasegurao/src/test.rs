@@ -300,6 +300,7 @@ fn test_amount_above_max_per_voucher_fails() {
 fn test_insufficient_funds_fails_without_state_change() {
     let tc = setup();
     let initial_balance: i128 = 100_000_000;
+    let max_per_voucher: i128 = 60_000_000;
     let expires_at = tc.env.ledger().timestamp() + 86400;
 
     tc.client.open_vault(
@@ -307,13 +308,25 @@ fn test_insufficient_funds_fails_without_state_change() {
         &tc.signer_pub,
         &initial_balance,
         &expires_at,
-        &1_000_000_000,
+        &max_per_voucher,
     );
 
+    // First voucher spends 60_000_000 (leaving 40_000_000)
+    let v1 = Voucher {
+        signer: tc.signer_pub.clone(),
+        merchant: tc.merchant.clone(),
+        amount: 60_000_000,
+        nonce: 807,
+        expiry: expires_at,
+    };
+    let sig1 = sign_voucher(&tc.env, &tc.contract_id, &v1, &tc.signer_key);
+    tc.client.redeem(&v1, &sig1);
+
+    // Second voucher wants 50_000_000 (<= max_per_voucher, but > remaining balance 40_000_000)
     let voucher = Voucher {
         signer: tc.signer_pub.clone(),
         merchant: tc.merchant.clone(),
-        amount: initial_balance + 1,
+        amount: 50_000_000,
         nonce: 808,
         expiry: expires_at,
     };
@@ -322,7 +335,7 @@ fn test_insufficient_funds_fails_without_state_change() {
     assert_eq!(res.err().unwrap().unwrap(), Error::InsufficientFunds.into());
 
     let vault = tc.client.get_vault(&tc.signer_pub).unwrap();
-    assert_eq!(vault.balance, initial_balance);
+    assert_eq!(vault.balance, 40_000_000);
     assert!(!tc.client.is_redeemed(&tc.signer_pub, &808));
 }
 
@@ -521,4 +534,58 @@ fn test_voucher_expiry_after_vault_expiry_fails() {
     let sig = sign_voucher(&tc.env, &tc.contract_id, &voucher, &tc.signer_key);
     let res = tc.client.try_redeem(&voucher, &sig);
     assert_eq!(res.err().unwrap().unwrap(), Error::VoucherExpired.into());
+}
+
+// 16. open_vault with max_per_voucher > amount fails
+#[test]
+fn test_open_vault_max_per_voucher_greater_than_amount_fails() {
+    let tc = setup();
+    let expires_at = tc.env.ledger().timestamp() + 86400;
+    let res = tc.client.try_open_vault(
+        &tc.owner,
+        &tc.signer_pub,
+        &100_000_000,
+        &expires_at,
+        &150_000_000,
+    );
+    assert_eq!(res.err().unwrap().unwrap(), Error::InvalidAmount.into());
+}
+
+// 17. open_vault with zero or negative amount fails
+#[test]
+fn test_open_vault_zero_amount_fails() {
+    let tc = setup();
+    let expires_at = tc.env.ledger().timestamp() + 86400;
+    let res = tc
+        .client
+        .try_open_vault(&tc.owner, &tc.signer_pub, &0, &expires_at, &0);
+    assert_eq!(res.err().unwrap().unwrap(), Error::InvalidAmount.into());
+}
+
+// 18. top_up after vault expiration fails
+#[test]
+fn test_top_up_after_expiry_fails() {
+    let tc = setup();
+    let initial_balance: i128 = 200_000_000;
+    let expires_at = tc.env.ledger().timestamp() + 100;
+
+    tc.client.open_vault(
+        &tc.owner,
+        &tc.signer_pub,
+        &initial_balance,
+        &expires_at,
+        &initial_balance,
+    );
+
+    tc.env.ledger().set_timestamp(expires_at + 1);
+    let res = tc.client.try_top_up(&tc.owner, &tc.signer_pub, &50_000_000);
+    assert_eq!(res.err().unwrap().unwrap(), Error::VoucherExpired.into());
+}
+
+// 19. top_up on non-existent vault fails
+#[test]
+fn test_top_up_nonexistent_vault_fails() {
+    let tc = setup();
+    let res = tc.client.try_top_up(&tc.owner, &tc.signer_pub, &50_000_000);
+    assert_eq!(res.err().unwrap().unwrap(), Error::VaultNotFound.into());
 }

@@ -58,7 +58,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     const decoded = scValToNative(simRes.result.retval);
-    if (!decoded) {
+    const isNone =
+      !decoded ||
+      (typeof decoded === 'object' && ('none' in decoded || 'None' in decoded)) ||
+      !decoded.owner;
+
+    if (isNone) {
       return res.status(200).json({
         ok: true,
         signer,

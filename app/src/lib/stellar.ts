@@ -12,21 +12,37 @@ import {
 } from '@stellar/stellar-sdk';
 import testnetDeployment from '../../public/deployments/testnet.json';
 
-export const NETWORK_PASSPHRASE = Networks.TESTNET;
-export const RPC_URL = testnetDeployment.rpcUrl || 'https://soroban-testnet.stellar.org';
-export const HORIZON_URL = testnetDeployment.horizonUrl || 'https://horizon-testnet.stellar.org';
+// Fallback configuration ensuring builds succeed even on fresh clones without setup
+const DEFAULT_DEPLOYMENT = {
+  networkPassphrase: Networks.TESTNET,
+  rpcUrl: 'https://soroban-testnet.stellar.org',
+  horizonUrl: 'https://horizon-testnet.stellar.org',
+  assetCode: 'tPEN',
+  assetSymbol: 'S/',
+  issuer: 'GDGYOA4TT444TUH4M2OPTSP2ZCXV3BGJVEKCKPHXO22SM2VOLQKJ5SYU',
+  tokenContractId: 'CCPNASLGOLZ4BTDPVXT2OLQI4DSGI2UQY7VNOCZUIDK72OJSOIYDF4VO',
+  contractId: 'CAWJ3NQHILVST2RHVNSIOSQFRJXXZY7KSBEZZXWGMBOHZ7OVQKQ6GQPT',
+  relayerAccount: 'GC4UNNAA32IVPDCHNSOPFIBE7YV4B4GBOFABP5EHZV5Y7Q32F6JTR6TO',
+  explorerBase: 'https://stellar.expert/explorer/testnet',
+};
+
+const d = (testnetDeployment || {}) as Record<string, any>;
+
+export const NETWORK_PASSPHRASE = d.networkPassphrase || DEFAULT_DEPLOYMENT.networkPassphrase;
+export const RPC_URL = d.rpcUrl || DEFAULT_DEPLOYMENT.rpcUrl;
+export const HORIZON_URL = d.horizonUrl || DEFAULT_DEPLOYMENT.horizonUrl;
 
 export const TESTNET_CONFIG = {
   networkPassphrase: NETWORK_PASSPHRASE,
   rpcUrl: RPC_URL,
   horizonUrl: HORIZON_URL,
-  assetCode: testnetDeployment.assetCode || 'tPEN',
-  assetSymbol: (testnetDeployment as any).assetSymbol || 'S/',
-  issuer: testnetDeployment.issuer,
-  tokenContractId: (testnetDeployment as any).tokenContractId,
-  contractId: testnetDeployment.contractId,
-  relayerAccount: testnetDeployment.relayerAccount,
-  explorerBase: 'https://stellar.expert/explorer/testnet',
+  assetCode: d.assetCode || DEFAULT_DEPLOYMENT.assetCode,
+  assetSymbol: d.assetSymbol || DEFAULT_DEPLOYMENT.assetSymbol,
+  issuer: d.issuer || DEFAULT_DEPLOYMENT.issuer,
+  tokenContractId: d.tokenContractId || DEFAULT_DEPLOYMENT.tokenContractId,
+  contractId: d.contractId || DEFAULT_DEPLOYMENT.contractId,
+  relayerAccount: d.relayerAccount || DEFAULT_DEPLOYMENT.relayerAccount,
+  explorerBase: DEFAULT_DEPLOYMENT.explorerBase,
 };
 
 const CONTRACT_ERROR_MAP: Record<number, string> = {

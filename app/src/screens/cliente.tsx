@@ -464,7 +464,7 @@ export default function ClienteScreen() {
 
   const isVaultExpired = vaultRecord ? nowSec >= vaultRecord.expiresAt : false;
   const secondsUntilExpiry = vaultRecord ? Math.max(0, vaultRecord.expiresAt - nowSec) : 0;
-  const walletBalanceNum = balances ? parseFloat(balances.balance) : 0;
+  const walletBalanceStroops = balances?.balance ? (parseAmountToStroops(balances.balance) ?? 0n) : 0n;
 
   return (
     <div className="cliente-container">
@@ -546,7 +546,7 @@ export default function ClienteScreen() {
               <div>
                 <span className="stat-label">Saldo libre en wallet (Soles de prueba):</span>
                 <span className="wallet-balance-val">
-                  {balances ? `S/ ${Number(balances.balance).toFixed(2)}` : '—'} <small>tPEN</small>
+                  {balances ? formatSoles(parseAmountToStroops(balances.balance) ?? 0n) : '—'} <small>tPEN</small>
                 </span>
               </div>
               <div className="wallet-btn-col">
@@ -726,7 +726,7 @@ export default function ClienteScreen() {
                 <button
                   type="submit"
                   className="btn btn-primary btn-block"
-                  disabled={busyAction !== null || walletBalanceNum <= 0}
+                  disabled={busyAction !== null || walletBalanceStroops <= 0n}
                 >
                   <ShieldCheck size={18} />
                   {busyAction === 'open_vault'

@@ -102,10 +102,11 @@ export async function fetchHorizonBalances(
 export async function waitForTransaction(
   server: rpc.Server,
   hash: string,
-  maxAttempts = 35
+  maxAttempts = 6,
+  delayMs = 1000
 ): Promise<{ status: 'SUCCESS' | 'FAILED'; hash: string; returnValue?: xdr.ScVal }> {
   for (let i = 0; i < maxAttempts; i++) {
-    await new Promise((r) => setTimeout(r, 1500));
+    await new Promise((r) => setTimeout(r, delayMs));
     const txStatus = await server.getTransaction(hash);
     if (txStatus.status === rpc.Api.GetTransactionStatus.SUCCESS) {
       return { status: 'SUCCESS', hash, returnValue: txStatus.returnValue };

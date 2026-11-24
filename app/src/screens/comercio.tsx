@@ -449,7 +449,7 @@ export default function ComercioScreen() {
               <div className="stat-card">
                 <span className="stat-label">Saldo en Stellar:</span>
                 <span className="stat-value-sm">
-                  {balances ? `S/ ${Number(balances.balance).toFixed(2)}` : '—'} <small>tPEN</small>
+                  {balances ? formatSoles(parseAmountToStroops(balances.balance) ?? 0n) : '—'} <small>tPEN</small>
                 </span>
               </div>
               <div className="stat-card">
