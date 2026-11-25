@@ -400,48 +400,106 @@ fn test_voucher_from_another_contract_fails() {
     assert!(res.is_err());
 }
 
-// 11. Shared test vector test (matches scripts/verify-vector.ts and test-vectors/voucher.json)
+// 11. Shared test vector test (reads test-vectors/voucher.json verified by scripts/verify-vector.ts)
+fn extract_json_field_start<'a>(json: &'a str, key: &str) -> &'a str {
+    let bytes = json.as_bytes();
+    let key_bytes = key.as_bytes();
+    let mut i = 0;
+    while i + key_bytes.len() + 2 <= bytes.len() {
+        if bytes[i] == b'"'
+            && &bytes[i + 1..i + 1 + key_bytes.len()] == key_bytes
+            && bytes[i + 1 + key_bytes.len()] == b'"'
+        {
+            let mut j = i + 2 + key_bytes.len();
+            while j < bytes.len() && matches!(bytes[j], b' ' | b'\t' | b'\r' | b'\n') {
+                j += 1;
+            }
+            if j < bytes.len() && bytes[j] == b':' {
+                j += 1;
+                while j < bytes.len() && matches!(bytes[j], b' ' | b'\t' | b'\r' | b'\n') {
+                    j += 1;
+                }
+                return &json[j..];
+            }
+        }
+        i += 1;
+    }
+    panic!("JSON key not found in test vector");
+}
+
+fn json_str_field<'a>(json: &'a str, key: &str) -> &'a str {
+    let rest = extract_json_field_start(json, key);
+    let inner = rest.strip_prefix('"').expect("expected JSON string");
+    let end = inner.find('"').expect("unterminated JSON string");
+    &inner[..end]
+}
+
+fn json_u64_field(json: &str, key: &str) -> u64 {
+    let rest = extract_json_field_start(json, key);
+    let mut val: u64 = 0;
+    let mut digits = 0;
+    for b in rest.as_bytes() {
+        if b.is_ascii_digit() {
+            val = val * 10 + (b - b'0') as u64;
+            digits += 1;
+        } else {
+            break;
+        }
+    }
+    assert!(digits > 0, "expected JSON integer");
+    val
+}
+
+fn decode_hex_fixed<const N: usize>(hex: &str) -> [u8; N] {
+    let b = hex.as_bytes();
+    assert_eq!(b.len(), N * 2, "unexpected hex length");
+    let nibble = |c: u8| match c {
+        b'0'..=b'9' => c - b'0',
+        b'a'..=b'f' => c - b'a' + 10,
+        b'A'..=b'F' => c - b'A' + 10,
+        _ => panic!("invalid hex char"),
+    };
+    let mut out = [0u8; N];
+    for i in 0..N {
+        out[i] = (nibble(b[i * 2]) << 4) | nibble(b[i * 2 + 1]);
+    }
+    out
+}
+
 #[test]
 fn test_shared_test_vector_matches_typescript() {
-    let env = Env::default();
-    let contract_id = Address::from_string(&soroban_sdk::String::from_str(
-        &env,
-        "CAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQC526",
-    ));
-    let merchant = Address::from_string(&soroban_sdk::String::from_str(
-        &env,
-        "GABAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEJXA",
-    ));
+    let vector_json = include_str!("../test-vectors/voucher.json");
+    let contract_str = json_str_field(vector_json, "contract_address");
+    let merchant_str = json_str_field(vector_json, "merchant");
+    let signer_hex = json_str_field(vector_json, "signer");
+    let message_hex = json_str_field(vector_json, "message_hex");
+    let signature_hex = json_str_field(vector_json, "signature_hex");
+    let amount = json_u64_field(vector_json, "amount") as i128;
+    let nonce = json_u64_field(vector_json, "nonce");
+    let expiry = json_u64_field(vector_json, "expiry");
 
-    // Signer public key from seed [42; 32]
-    let signer_bytes: [u8; 32] = [
-        0x19, 0x7f, 0x6b, 0x23, 0xe1, 0x6c, 0x85, 0x32, 0xc6, 0xab, 0xc8, 0x38, 0xfa, 0xcd, 0x5e,
-        0xa7, 0x89, 0xbe, 0x0c, 0x76, 0xb2, 0x92, 0x03, 0x34, 0x03, 0x9b, 0xfa, 0x8b, 0x3d, 0x36,
-        0x8d, 0x61,
-    ];
-    let signer_pub = BytesN::from_array(&env, &signer_bytes);
+    let env = Env::default();
+    let contract_id = Address::from_string(&soroban_sdk::String::from_str(&env, contract_str));
+    let merchant = Address::from_string(&soroban_sdk::String::from_str(&env, merchant_str));
+    let signer_pub = BytesN::from_array(&env, &decode_hex_fixed::<32>(signer_hex));
+    let sig = BytesN::from_array(&env, &decode_hex_fixed::<64>(signature_hex));
 
     let voucher = Voucher {
         signer: signer_pub.clone(),
         merchant,
-        amount: 10_000_000,
-        nonce: 42,
-        expiry: 1735689600,
+        amount,
+        nonce,
+        expiry,
     };
 
-    let expected_sig_bytes: [u8; 64] = [
-        0xbe, 0xfe, 0xc6, 0x23, 0x22, 0xbf, 0x84, 0x58, 0x01, 0x84, 0xf4, 0x0f, 0x88, 0xfa, 0x8a,
-        0x21, 0xb9, 0x27, 0x3c, 0x09, 0xef, 0x4e, 0x60, 0x17, 0xa2, 0x2c, 0x3c, 0xd4, 0x90, 0x8d,
-        0x33, 0x90, 0x1f, 0x28, 0x29, 0x86, 0x5b, 0xcf, 0xef, 0x8a, 0x48, 0xb3, 0xe6, 0xc1, 0xbf,
-        0xc0, 0x25, 0x9c, 0x3e, 0x38, 0xf1, 0x0d, 0x20, 0x73, 0x5a, 0x28, 0xdd, 0xa7, 0x36, 0xd8,
-        0x9d, 0x6d, 0x5d, 0x06,
-    ];
-    let sig = BytesN::from_array(&env, &expected_sig_bytes);
-
     let msg = canonical_message(&env, &contract_id, &voucher);
+    let expected_msg = decode_hex_fixed::<161>(message_hex);
     assert_eq!(msg.len(), 161);
+    let mut actual_msg = [0u8; 161];
+    msg.copy_into_slice(&mut actual_msg);
+    assert_eq!(actual_msg, expected_msg);
 
-    // Cryptographic verification must pass using the exact signature generated by TypeScript
+    // Cryptographic verification must pass using the exact signature loaded from test-vectors/voucher.json
     env.crypto().ed25519_verify(&signer_pub, &msg, &sig);
 }
 
@@ -588,4 +646,44 @@ fn test_top_up_nonexistent_vault_fails() {
     let tc = setup();
     let res = tc.client.try_top_up(&tc.owner, &tc.signer_pub, &50_000_000);
     assert_eq!(res.err().unwrap().unwrap(), Error::VaultNotFound.into());
+}
+
+// 20. redeem with zero amount fails
+#[test]
+fn test_redeem_zero_amount_fails() {
+    let tc = setup();
+    let initial_balance: i128 = 200_000_000;
+    let expires_at = tc.env.ledger().timestamp() + 86400;
+
+    tc.client.open_vault(
+        &tc.owner,
+        &tc.signer_pub,
+        &initial_balance,
+        &expires_at,
+        &initial_balance,
+    );
+
+    let voucher = Voucher {
+        signer: tc.signer_pub.clone(),
+        merchant: tc.merchant.clone(),
+        amount: 0,
+        nonce: 42,
+        expiry: expires_at - 100,
+    };
+    let sig = sign_voucher(&tc.env, &tc.contract_id, &voucher, &tc.signer_key);
+    let res = tc.client.try_redeem(&voucher, &sig);
+    assert_eq!(res.err().unwrap().unwrap(), Error::InvalidAmount.into());
+}
+
+// 21. double initialize fails with AlreadyInitialized
+#[test]
+fn test_double_initialize_fails() {
+    let tc = setup();
+    let token_admin = Address::generate(&tc.env);
+    let other_token = tc.env.register_stellar_asset_contract_v2(token_admin);
+    let res = tc.client.try_initialize(&other_token.address());
+    assert_eq!(
+        res.err().unwrap().unwrap(),
+        Error::AlreadyInitialized.into()
+    );
 }

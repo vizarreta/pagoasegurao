@@ -9,16 +9,16 @@ Este documento cumple la regla 9 de `CLAUDE.md` y el requisito de transparencia 
 ## Partes desarrolladas con asistencia de IA
 
 - **Contrato Soroban (`contracts/pagoasegurao/src/lib.rs`)**:
-  - Estructuras `Vault`, `Voucher`, `DataKey`, `Error` (`#1`–`#10`) y eventos `#[contractevent]`.
+  - Estructuras `Vault`, `Voucher`, `DataKey`, `Error` (`#1`–`#11`) y eventos `#[contractevent]`.
   - Serialización canónica de 161 bytes compatible con `@stellar/stellar-sdk`, verificación nativa Ed25519, control de autorización de propietario (`vault.owner == owner`), cálculo dinámico de TTL y transferencias vía SAC.
 - **Pruebas unitarias (`contracts/pagoasegurao/src/test.rs`)**:
-  - 15 pruebas unitarias cubriendo flujo feliz, doble canje, firmas inválidas, otra clave, vales vencidos, comercio equivocado, tope por vale, fondos insuficientes, ciclo de vida y autorización de `close_vault`/`top_up`, expiración inválida y vector compartido.
+  - 21 pruebas unitarias cubriendo flujo feliz, doble canje, firmas inválidas, otra clave, vales vencidos, comercio equivocado, tope por vale, fondos insuficientes, ciclo de vida y autorización de `close_vault`/`top_up`, expiración inválida, vector compartido, `max_per_voucher > amount`, amounts inválidos, `top_up` post-expiración, `top_up` en bóveda inexistente, `redeem` con monto 0 y doble inicialización.
 - **Scripts de verificación, despliegue y E2E (`scripts/`)**:
   - `scripts/verify-vector.ts`, `scripts/setup-testnet.ts` y `scripts/test-e2e-api.ts` (12 escenarios reales ejecutados contra Stellar Testnet Protocol 30).
 - **Relayer serverless (`api/` y `vercel.json`)**:
   - Implementación real contra Stellar Testnet de `/api/redeem`, `/api/faucet` y `/api/vault/:signer` con patrocinio de comisiones, idempotencia y traducción de errores a español.
 - **PWA Frontend (`app/src/`)**:
-  - Pantallas Cliente y Comercio conectadas a Stellar Testnet, polyfill de `Buffer`, aritmética exacta en `BigInt` stroops, IndexedDB v2 separado por rol, `QRScanner`, generación de QR compactos e íconos PWA.
+  - Pantallas Cliente y Comercio conectadas a Stellar Testnet, polyfill de `Buffer`, aritmética exacta en `BigInt` stroops, IndexedDB v3 separado por rol, reconciliación `is_redeemed`, `QRScanner`, generación de QR compactos, íconos PWA y 8 pruebas unitarias TypeScript (`app/src/lib/__tests__/pagoasegurao.test.ts`).
 
 ## Partes elaboradas, auditadas y validadas por el equipo
 

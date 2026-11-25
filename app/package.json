@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "tsx --test src/lib/__tests__/pagoasegurao.test.ts"
   },
   "dependencies": {
     "@stellar/stellar-sdk": "^17.4.0",

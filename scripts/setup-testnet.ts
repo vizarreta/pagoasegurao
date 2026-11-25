@@ -259,59 +259,70 @@ async function main() {
     }
   }
 
-  // 4. Upload WASM & Deploy PagoAsegurao contract
+  // 4. Upload WASM & Deploy PagoAsegurao contract (or reuse existing CONTRACT_ID if provided)
   console.log('\n--- Paso 3: Subida de WASM, despliegue e inicialización de PagoAsegurao ---');
-  const issuerAccUpload = await server.getAccount(issuer.publicKey());
-  const uploadTx = new TransactionBuilder(issuerAccUpload, {
-    fee: '100000',
-    networkPassphrase: NETWORK_PASSPHRASE,
-  })
-    .addOperation(Operation.uploadContractWasm({ wasm: wasmBytes }))
-    .setTimeout(60)
-    .build();
-  const uploadRes = await sendSorobanTx(server, uploadTx, issuer, 'Upload WASM');
-  const wasmUploadTxHash = uploadRes.hash;
+  const existingContractId = process.env.CONTRACT_ID || envFile.CONTRACT_ID;
+  let wasmUploadTxHash = '';
+  let deployTxHash = '';
+  let initTxHash = '';
+  let contractId = '';
 
-  const issuerAccDeploy = await server.getAccount(issuer.publicKey());
-  const salt = crypto.randomBytes(32);
-  const createContractTx = new TransactionBuilder(issuerAccDeploy, {
-    fee: '100000',
-    networkPassphrase: NETWORK_PASSPHRASE,
-  })
-    .addOperation(
-      Operation.createCustomContract({
-        address: Address.fromString(issuer.publicKey()),
-        wasmHash,
-        salt,
-      })
-    )
-    .setTimeout(60)
-    .build();
-  const createRes = await sendSorobanTx(server, createContractTx, issuer, 'Deploy Contrato PagoAsegurao');
-  const deployTxHash = createRes.hash;
-  if (!createRes.returnValue) {
-    throw new Error('No se recibió el Address del contrato desplegado en returnValue');
+  if (existingContractId && process.argv.includes('--reuse-contract')) {
+    contractId = existingContractId;
+    console.log(`  ✓ Reutilizando contrato existente: ${contractId}`);
+  } else {
+    const issuerAccUpload = await server.getAccount(issuer.publicKey());
+    const uploadTx = new TransactionBuilder(issuerAccUpload, {
+      fee: '100000',
+      networkPassphrase: NETWORK_PASSPHRASE,
+    })
+      .addOperation(Operation.uploadContractWasm({ wasm: wasmBytes }))
+      .setTimeout(60)
+      .build();
+    const uploadRes = await sendSorobanTx(server, uploadTx, issuer, 'Upload WASM');
+    wasmUploadTxHash = uploadRes.hash;
+
+    const issuerAccDeploy = await server.getAccount(issuer.publicKey());
+    const salt = crypto.randomBytes(32);
+    const createContractTx = new TransactionBuilder(issuerAccDeploy, {
+      fee: '100000',
+      networkPassphrase: NETWORK_PASSPHRASE,
+    })
+      .addOperation(
+        Operation.createCustomContract({
+          address: Address.fromString(issuer.publicKey()),
+          wasmHash,
+          salt,
+        })
+      )
+      .setTimeout(60)
+      .build();
+    const createRes = await sendSorobanTx(server, createContractTx, issuer, 'Deploy Contrato PagoAsegurao');
+    deployTxHash = createRes.hash;
+    if (!createRes.returnValue) {
+      throw new Error('No se recibió el Address del contrato desplegado en returnValue');
+    }
+    contractId = Address.fromScVal(createRes.returnValue).toString();
+    console.log(`  ★ Contract ID real en testnet: ${contractId}`);
+
+    // Initialize contract with tPEN SAC
+    const issuerAccInit = await server.getAccount(issuer.publicKey());
+    const initTx = new TransactionBuilder(issuerAccInit, {
+      fee: '100000',
+      networkPassphrase: NETWORK_PASSPHRASE,
+    })
+      .addOperation(
+        Operation.invokeContractFunction({
+          contract: contractId,
+          function: 'initialize',
+          args: [Address.fromString(tokenContractId).toScVal()],
+        })
+      )
+      .setTimeout(60)
+      .build();
+    const initRes = await sendSorobanTx(server, initTx, issuer, `Initialize PagoAsegurao(${ASSET_CODE} SAC)`);
+    initTxHash = initRes.hash;
   }
-  const contractId = Address.fromScVal(createRes.returnValue).toString();
-  console.log(`  ★ Contract ID real en testnet: ${contractId}`);
-
-  // Initialize contract with tPEN SAC
-  const issuerAccInit = await server.getAccount(issuer.publicKey());
-  const initTx = new TransactionBuilder(issuerAccInit, {
-    fee: '100000',
-    networkPassphrase: NETWORK_PASSPHRASE,
-  })
-    .addOperation(
-      Operation.invokeContractFunction({
-        contract: contractId,
-        function: 'initialize',
-        args: [Address.fromString(tokenContractId).toScVal()],
-      })
-    )
-    .setTimeout(60)
-    .build();
-  const initRes = await sendSorobanTx(server, initTx, issuer, `Initialize PagoAsegurao(${ASSET_CODE} SAC)`);
-  const initTxHash = initRes.hash;
 
   // 5. Real E2E Validation on Testnet: open_vault -> offline voucher -> relayer redeem -> double redeem rejected
   console.log('\n--- Paso 4: Validación E2E en vivo en Stellar Testnet ---');
@@ -457,9 +468,9 @@ async function main() {
     createdAt: new Date().toISOString(),
     transactions: {
       sacDeploy: sacTxHash || undefined,
-      wasmUpload: wasmUploadTxHash,
-      contractDeploy: deployTxHash,
-      contractInit: initTxHash,
+      wasmUpload: wasmUploadTxHash || undefined,
+      contractDeploy: deployTxHash || undefined,
+      contractInit: initTxHash || undefined,
       openVault: openVaultTxHash,
       redeem: redeemTxHash,
     },

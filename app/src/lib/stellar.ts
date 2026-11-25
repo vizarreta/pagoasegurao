@@ -6,23 +6,26 @@ import {
   Networks,
   Operation,
   TransactionBuilder,
+  Account,
   rpc,
   xdr,
   nativeToScVal,
+  scValToNative,
 } from '@stellar/stellar-sdk';
 import testnetDeployment from '../../public/deployments/testnet.json';
+import { CONTRACT_ERROR_MAP } from '../../../api/_errors';
 
-// Fallback configuration ensuring builds succeed even on fresh clones without setup
+// Fallback configuration matching public testnet deployment (never secrets)
 const DEFAULT_DEPLOYMENT = {
   networkPassphrase: Networks.TESTNET,
   rpcUrl: 'https://soroban-testnet.stellar.org',
   horizonUrl: 'https://horizon-testnet.stellar.org',
   assetCode: 'tPEN',
   assetSymbol: 'S/',
-  issuer: 'GDGYOA4TT444TUH4M2OPTSP2ZCXV3BGJVEKCKPHXO22SM2VOLQKJ5SYU',
-  tokenContractId: 'CCPNASLGOLZ4BTDPVXT2OLQI4DSGI2UQY7VNOCZUIDK72OJSOIYDF4VO',
+  issuer: 'GDX4ZNACYNYJFY2QK6P7BKSF5UTDUYFY6J5VLRHMEN2H76KSN6N3AWYL',
+  tokenContractId: 'CDUBDTM5Z3Y3OKKQ5BIKEP4XHW2WTHS6AUB4N2LMN6TOZQDAL2WPX5HF',
   contractId: 'CAWJ3NQHILVST2RHVNSIOSQFRJXXZY7KSBEZZXWGMBOHZ7OVQKQ6GQPT',
-  relayerAccount: 'GC4UNNAA32IVPDCHNSOPFIBE7YV4B4GBOFABP5EHZV5Y7Q32F6JTR6TO',
+  relayerAccount: 'GDTAPYWCT4VCDKAQ7NUI6E5NQ6DYXDX5AV7OUF7ACQ6JO575ZMRPKBQV',
   explorerBase: 'https://stellar.expert/explorer/testnet',
 };
 
@@ -43,19 +46,6 @@ export const TESTNET_CONFIG = {
   contractId: d.contractId || DEFAULT_DEPLOYMENT.contractId,
   relayerAccount: d.relayerAccount || DEFAULT_DEPLOYMENT.relayerAccount,
   explorerBase: DEFAULT_DEPLOYMENT.explorerBase,
-};
-
-const CONTRACT_ERROR_MAP: Record<number, string> = {
-  1: 'Este vale ya fue liquidado anteriormente (doble canje evitado).',
-  2: 'El vale ha vencido o supera la fecha límite de la bóveda.',
-  3: 'El monto es inválido o supera el tope por vale.',
-  4: 'Saldo insuficiente en la bóveda.',
-  5: 'No se encontró una bóveda activa en Stellar.',
-  6: 'La bóveda aún no vence; podrás cerrarla al llegar la fecha límite.',
-  7: 'Ya existe una bóveda activa para esta cuenta.',
-  8: 'Firma criptográfica inválida.',
-  9: 'No tienes autorización para modificar esta bóveda.',
-  10: 'La fecha de vencimiento debe ser futura.',
 };
 
 export function mapSorobanError(raw: string): string {
@@ -387,4 +377,39 @@ export async function fetchVaultFromRelayer(signerPublicKey: string): Promise<Re
     throw new Error(data.error || 'No se pudo consultar la bóveda en Stellar Testnet.');
   }
   return data as RemoteVaultResponse;
+}
+
+export async function checkVoucherRedeemedOnChain(
+  signerPublicKey: string,
+  nonce: string | bigint
+): Promise<boolean | null> {
+  try {
+    const server = new rpc.Server(TESTNET_CONFIG.rpcUrl);
+    const signerBytes = strKeyToPublicKey(signerPublicKey);
+    const dummyAcc = new Account(TESTNET_CONFIG.relayerAccount, '0');
+    const tx = new TransactionBuilder(dummyAcc, {
+      fee: '100',
+      networkPassphrase: TESTNET_CONFIG.networkPassphrase,
+    })
+      .addOperation(
+        Operation.invokeContractFunction({
+          contract: TESTNET_CONFIG.contractId,
+          function: 'is_redeemed',
+          args: [
+            xdr.ScVal.scvBytes(Buffer.from(signerBytes)),
+            nativeToScVal(BigInt(nonce), { type: 'u64' }),
+          ],
+        })
+      )
+      .setTimeout(30)
+      .build();
+
+    const sim = await server.simulateTransaction(tx);
+    if (rpc.Api.isSimulationSuccess(sim) && sim.result) {
+      return Boolean(scValToNative(sim.result.retval));
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }

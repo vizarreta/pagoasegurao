@@ -26,6 +26,7 @@ import {
   CachedVaultRecord,
 } from '../lib/storage';
 import { encodeQRA, decodeQRB, verifyVoucherLocally } from '../lib/voucher';
+import { checkVoucherRedeemedOnChain } from '../lib/stellar';
 import { QRScanner } from '../components/QRScanner';
 import {
   Store,
@@ -49,6 +50,7 @@ interface StatusAlert {
 }
 
 const PRESET_AMOUNTS = ['2.00', '5.00', '10.00', '20.00'];
+const ACTIVE_QRA_STORAGE_KEY = 'pagoasegurao_active_qra';
 
 export default function ComercioScreen() {
   const [keyRecord, setKeyRecord] = useState<KeyRecord | null>(null);
@@ -101,6 +103,7 @@ export default function ComercioScreen() {
       });
 
       let settledCount = 0;
+      let pendingConfirmCount = 0;
       let rejectedCount = 0;
       let networkFailCount = 0;
 
@@ -123,7 +126,24 @@ export default function ComercioScreen() {
 
           const data = await res.json();
           if (res.ok && data.ok && data.hash) {
-            await updateMerchantVoucherStatus(v.id, 'liquidado', data.hash, undefined);
+            if (data.status === 'PENDING' || res.status === 202) {
+              await updateMerchantVoucherStatus(v.id, 'pendiente', data.hash, undefined);
+              // Give ledger ~2.5s to confirm from browser without risking Vercel timeout
+              await new Promise((r) => setTimeout(r, 2500));
+              const confirmed = await checkVoucherRedeemedOnChain(v.signer, v.nonce);
+              if (confirmed === true) {
+                await updateMerchantVoucherStatus(v.id, 'liquidado', data.hash, undefined);
+                settledCount++;
+              } else {
+                pendingConfirmCount++;
+              }
+            } else {
+              await updateMerchantVoucherStatus(v.id, 'liquidado', data.hash, undefined);
+              settledCount++;
+            }
+          } else if (data.alreadyRedeemed && v.txHash) {
+            // Previously sent via 202 PENDING and now confirmed on-chain
+            await updateMerchantVoucherStatus(v.id, 'liquidado', v.txHash, undefined);
             settledCount++;
           } else {
             const errText = data.error || 'El contrato rechazó el vale.';
@@ -148,10 +168,15 @@ export default function ComercioScreen() {
       }
 
       setSyncing(false);
-      if (settledCount > 0 && rejectedCount === 0 && networkFailCount === 0) {
+      if (settledCount > 0 && rejectedCount === 0 && networkFailCount === 0 && pendingConfirmCount === 0) {
         setStatusMsg({
           type: 'ok',
           text: `¡${settledCount} vale(s) liquidado(s) en Stellar Testnet! Revisa tu saldo en Soles y el enlace al explorador.`,
+        });
+      } else if (pendingConfirmCount > 0) {
+        setStatusMsg({
+          type: 'info',
+          text: `${settledCount} liquidado(s) y ${pendingConfirmCount} enviado(s) esperando confirmación final en Stellar Testnet.`,
         });
       } else if (rejectedCount > 0) {
         setStatusMsg({
@@ -181,6 +206,19 @@ export default function ComercioScreen() {
           await saveKeys('merchant', savedKey);
         }
         setKeyRecord(savedKey);
+
+        try {
+          const savedActive = sessionStorage.getItem(ACTIVE_QRA_STORAGE_KEY);
+          if (savedActive) {
+            const parsed = JSON.parse(savedActive) as { merchant?: string; qrA?: string; expectedUnits?: string };
+            if (parsed.merchant === savedKey.publicKey && parsed.qrA && parsed.expectedUnits) {
+              setGeneratedQRA(parsed.qrA);
+              setExpectedChargeUnits(BigInt(parsed.expectedUnits));
+            }
+          }
+        } catch {
+          // Ignore invalid sessionStorage entry
+        }
 
         const allVouchers = (await getMerchantVouchers()).sort((a, b) => b.createdAt - a.createdAt);
         setQueue(allVouchers);
@@ -260,6 +298,12 @@ export default function ComercioScreen() {
     setExpectedChargeUnits(units);
     const qra = encodeQRA(keyRecord.publicKey, units);
     setGeneratedQRA(qra);
+    try {
+      sessionStorage.setItem(
+        ACTIVE_QRA_STORAGE_KEY,
+        JSON.stringify({ merchant: keyRecord.publicKey, qrA: qra, expectedUnits: units.toString() })
+      );
+    } catch {}
     setStatusMsg({
       type: 'info',
       text: `QR-A listo por ${formatSoles(units)}. Muéstralo al cliente para que firme el vale.`,
@@ -354,6 +398,9 @@ export default function ComercioScreen() {
 
     setGeneratedQRA(null);
     setExpectedChargeUnits(null);
+    try {
+      sessionStorage.removeItem(ACTIVE_QRA_STORAGE_KEY);
+    } catch {}
     setStatusMsg({
       type: 'ok',
       text: `¡Pago recibido (${formatSoles(payload.amount)}), verificado localmente y pendiente de liquidar!`,
@@ -581,6 +628,19 @@ export default function ComercioScreen() {
                   {copiedId === 'qra-code' ? 'Copiado' : 'Copiar QR-A'}
                 </button>
                 <button
+                  type="button"
+                  className="btn btn-ghost"
+                  onClick={() => {
+                    setGeneratedQRA(null);
+                    setExpectedChargeUnits(null);
+                    try {
+                      sessionStorage.removeItem(ACTIVE_QRA_STORAGE_KEY);
+                    } catch {}
+                  }}
+                >
+                  Cancelar
+                </button>
+                <button
                   className="btn btn-primary btn-block"
                   onClick={() => setScanningQRB(true)}
                 >
@@ -624,7 +684,8 @@ export default function ComercioScreen() {
 
                       <div className="queue-item-status">
                         <span className={`status-badge status-${v.status}`}>
-                          {v.status === 'pendiente' && 'Pendiente de liquidar'}
+                          {v.status === 'pendiente' &&
+                            (v.txHash ? 'Confirmando en Stellar' : 'Pendiente de liquidar')}
                           {v.status === 'liquidado' && 'Liquidado en Stellar'}
                           {v.status === 'rechazado' && 'Rechazado'}
                         </span>

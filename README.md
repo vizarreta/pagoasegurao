@@ -81,7 +81,7 @@ Ver detalle completo en [`docs/architecture.md`](docs/architecture.md).
    - `redeem(voucher, signature)`: verifica nonce único, vigencia, tope por vale, firma Ed25519 nativa (`env.crypto().ed25519_verify`) sobre el mensaje canónico de 161 bytes y saldo disponible; aplica efectos antes de transferir (patrón CEI) y emite evento `Redeemed`.
    - `close_vault(owner, signer)`: exige autorización del dueño original (`vault.owner == owner`) y que `now >= expires_at`, eliminando la bóveda y devolviendo el saldo remanente.
    - `get_vault(signer)` y `is_redeemed(signer, nonce)`: lectura del estado on-chain.
-   - Códigos de error estables (`#1`–`#10`) traducidos a español claro en relayer y UI.
+   - Códigos de error estables (`#1`–`#11`) traducidos a español claro desde una tabla compartida (`api/_errors.ts`) en relayer y UI.
 
 2. **Aplicación Móvil PWA (`app/`)** — React 18, TypeScript estricto, Vite 5, `vite-plugin-pwa` (Workbox precaching de 16 archivos) y `@stellar/stellar-sdk 17.4.0`:
    - Dos modos en una sola PWA: **Cliente (Pagar)** y **Comercio (Cobrar)**, íntegramente en **Soles (`S/` · `tPEN`)**.
@@ -91,7 +91,7 @@ Ver detalle completo en [`docs/architecture.md`](docs/architecture.md).
    - Sincronización automática al volver la conexión (`window.addEventListener('online')`).
 
 3. **Relayer Serverless (`api/`)** — TypeScript ESM nativo para Vercel (`vercel.json`):
-   - `POST /api/redeem`: verifica idempotencia (`is_redeemed`), trustline `tPEN` del comercio, simula en Soroban, traduce errores `#1`–`#10` a español, patrocina comisiones con `RELAYER_SECRET` y espera confirmación en ledger.
+   - `POST /api/redeem`: verifica idempotencia (`is_redeemed`), trustline `tPEN` del comercio, simula en Soroban, traduce errores `#1`–`#11` a español, patrocina comisiones con `RELAYER_SECRET` y espera confirmación en ledger (con fallback `HTTP 202 PENDING` dentro del límite de Vercel).
    - `POST /api/faucet`: fondea cuentas vía Friendbot y emite `S/ 200.00` (`200 tPEN` de prueba) con límite de uso.
    - `GET /api/vault/:signer`: simula `get_vault` en Soroban y devuelve balances reales de Horizon.
 
@@ -112,14 +112,15 @@ git clone https://github.com/vizarreta/pagoasegurao.git
 cd pagoasegurao
 pnpm install
 
-# 2. Probar, validar y compilar el contrato Soroban (15 pruebas unitarias)
+# 2. Probar, validar y compilar el contrato Soroban (21 pruebas unitarias)
 cargo test --lib
 cargo fmt --check
 cargo clippy --lib --tests -- -D warnings
 stellar contract build
 
-# 3. Verificar el vector criptográfico compartido Rust <-> TypeScript
+# 3. Verificar el vector criptográfico compartido Rust <-> TypeScript y tests de la app
 pnpm verify:vector
+pnpm test:app
 
 # 4. (Opcional) Desplegar un entorno fresco en Stellar Testnet y generar .env local
 pnpm setup:testnet
@@ -139,7 +140,7 @@ pnpm build
 
 ## 6. Pruebas verificadas
 
-### Contrato Soroban (`cargo test --lib`) — **15 / 15 pasando** (`clippy`: 0 warnings)
+### Contrato Soroban (`cargo test --lib`) — **21 / 21 pasando** (`clippy`: 0 warnings)
 1. `test_happy_path_open_and_redeem`
 2. `test_double_redeem_fails`
 3. `test_invalid_signature_fails`
@@ -150,11 +151,20 @@ pnpm build
 8. `test_insufficient_funds_fails_without_state_change`
 9. `test_close_vault_lifecycle`
 10. `test_voucher_from_another_contract_fails`
-11. `test_shared_test_vector_matches_typescript` (vector compartido de 161 bytes)
+11. `test_shared_test_vector_matches_typescript` (lee directamente `test-vectors/voucher.json`)
 12. `test_close_vault_unauthorized_fails`
 13. `test_top_up_authorized_and_unauthorized`
 14. `test_open_vault_past_expiry_fails`
 15. `test_voucher_expiry_after_vault_expiry_fails`
+16. `test_open_vault_max_per_voucher_greater_than_amount_fails`
+17. `test_open_vault_zero_amount_fails`
+18. `test_top_up_after_expiry_fails`
+19. `test_top_up_nonexistent_vault_fails`
+20. `test_redeem_zero_amount_fails`
+21. `test_double_initialize_fails`
+
+### App y Lógica Criptográfica (`pnpm test:app`) — **8 / 8 pasando**
+Valida en TypeScript estricto (`node --test` + `tsx`): aritmética exacta en `BigInt` stroops (7 decimales, sin floats), mapeo unificado de errores Soroban `#1`–`#11` (`api/_errors.ts`), codificación compacta base64url `QR-A` (`SSC1.`) y `QR-B` (`SSV1.`), verificación Ed25519 local offline y coincidencia byte-a-byte con `contracts/pagoasegurao/test-vectors/voucher.json`.
 
 ### Suite End-to-End en vivo (`pnpm test:e2e`) — **12 / 12 pasando en Stellar Testnet (`S/` · `tPEN`)**
 Valida en vivo: onboarding cliente y comercio (`/api/faucet` + trustline `tPEN`), `open_vault`, `GET /api/vault/:signer`, flujo offline `QR-A -> QR-B` con verificación Ed25519 local, `POST /api/redeem` patrocinado por relayer, rechazos con mensaje claro en español (doble canje HTTP 409, monto sobre tope `#3`, vale vencido `#2`, firma alterada `#8`), `top_up`, rechazo de cierre anticipado (`#6`) y `close_vault` tras vencimiento con devolución de Soles de prueba.

@@ -8,8 +8,10 @@
 
 ### Fase 1 — Contrato Soroban y Pruebas: COMPLETADA
 - Contrato Soroban en `contracts/pagoasegurao/src/lib.rs` actualizado a `soroban-sdk 29.0.1`:
-  - Bóvedas (`open_vault`, `top_up`, `close_vault`, `get_vault`, `get_token`), vales (`redeem`, `is_redeemed`), autorización de dueño (`Error::Unauthorized = 9`), validación de expiración (`Error::InvalidExpiry = 10`), TTL dinámico y eventos `#[contractevent]`.
-- **Validación:** `cargo test --lib` (**15/15 pasando**), `cargo clippy --lib --tests -- -D warnings` (**0 warnings**), `cargo fmt --check` limpio, `stellar contract build` (**8,910 bytes WASM optimizado**).
+  - Bóvedas (`open_vault`, `top_up`, `close_vault`, `get_vault`, `get_token`), vales (`redeem`, `is_redeemed`), autorización de dueño (`Error::Unauthorized = 9`), validación de expiración (`Error::InvalidExpiry = 10`), validación `max_per_voucher <= amount`, `Error::AlreadyInitialized = 11`, TTL dinámico y eventos `#[contractevent]`.
+- **Validación:** `cargo test --offline` (**21/21 pasando**, vector compartido leído directamente desde `test-vectors/voucher.json`), `cargo clippy --offline -- -D warnings` (**0 warnings**), `cargo fmt --check` limpio, `pnpm test:app` (**8/8 pasando**), `pnpm verify:vector` OK, `pnpm build` OK.
+
+> **Nota sobre re-despliegue de contrato:** Los ajustes locales en `lib.rs` (`max_per_voucher <= amount` y `AlreadyInitialized = 11`) ya compilan y pasan todas las pruebas. El contrato ya desplegado en `CAWJ3NQHILVST2RHVNSIOSQFRJXXZY7KSBEZZXWGMBOHZ7OVQKQ6GQPT` continúa funcionando en Testnet/Vercel (la UI ya valida `max_per_voucher <= amount`); si se desea reflejar estos dos checks en un nuevo contrato on-chain, ejecutar `pnpm setup:testnet` con las variables de Vercel actualizadas.
 
 ### Fase 2 — Testnet (`tPEN` Soles de prueba) y Vector Compartido: COMPLETADA
 - `@stellar/stellar-sdk 17.4.0` (Protocol 30) y vector compartido Rust/TS verificado (`161` bytes canónicos).

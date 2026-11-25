@@ -9,9 +9,11 @@ export interface VaultRecord {
   signer: string;
   owner: string;
   balance: string;
+  onChainBalance?: string;
   expiresAt: number;
   maxPerVoucher: string;
   openTxHash?: string;
+  openedAt?: number;
   lastSyncedAt?: number;
 }
 
@@ -133,6 +135,22 @@ export async function saveClientVoucher(record: VoucherRecord): Promise<void> {
 export async function getClientVouchers(): Promise<VoucherRecord[]> {
   const db = await getDb();
   return db.getAll('client_vouchers');
+}
+
+export async function updateClientVoucherStatus(
+  id: string,
+  status: VoucherRecord['status'],
+  txHash?: string,
+  error?: string
+): Promise<void> {
+  const db = await getDb();
+  const v = await db.get('client_vouchers', id);
+  if (v) {
+    v.status = status;
+    if (txHash) v.txHash = txHash;
+    v.error = error;
+    await db.put('client_vouchers', v, id);
+  }
 }
 
 export async function clearClientVouchers(): Promise<void> {

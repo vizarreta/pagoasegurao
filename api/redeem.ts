@@ -17,6 +17,24 @@ import {
   checkIsRedeemedOnChain,
 } from './_config.js';
 
+async function withRpcRetry<T>(fn: () => Promise<T>, maxRetries = 2, delayMs = 300): Promise<T> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (err: any) {
+      lastErr = err;
+      const msg = String(err?.message || '');
+      const isTransient = /fetch|network|timeout|ECONNRESET|ETIMEDOUT|502|503|504|429|TRY_AGAIN_LATER/i.test(msg);
+      if (!isTransient || attempt === maxRetries) {
+        throw err;
+      }
+      await new Promise((r) => setTimeout(r, delayMs * (attempt + 1)));
+    }
+  }
+  throw lastErr;
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -150,7 +168,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       args: [voucherScVal, xdr.ScVal.scvBytes(sigBytes)],
     });
 
-    const relayerAccount = await server.getAccount(relayerKp.publicKey());
+    const relayerAccount = await withRpcRetry(() => server.getAccount(relayerKp.publicKey()));
+    // Note: base fee is just an initial ceiling; server.prepareTransaction replaces it dynamically with Soroban resource fee.
     const tx = new TransactionBuilder(relayerAccount, {
       fee: '100000',
       networkPassphrase: config.networkPassphrase,
@@ -159,7 +178,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       .setTimeout(60)
       .build();
 
-    const simRes = await server.simulateTransaction(tx);
+    const simRes = await withRpcRetry(() => server.simulateTransaction(tx));
     if (rpc.Api.isSimulationError(simRes)) {
       const parsed = parseContractError(simRes.error || '');
       const status = parsed.code === 1 ? 409 : 400;
@@ -172,9 +191,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
     }
 
-    const prepared = await server.prepareTransaction(tx);
+    const prepared = await withRpcRetry(() => server.prepareTransaction(tx));
     prepared.sign(relayerKp);
-    const sendRes = await server.sendTransaction(prepared);
+    const sendRes = await withRpcRetry(() => server.sendTransaction(prepared));
     if (sendRes.status === 'ERROR') {
       return res.status(502).json({
         ok: false,
@@ -185,9 +204,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     let finalTx: { status: 'SUCCESS' | 'FAILED'; hash: string } | null = null;
     try {
-      finalTx = await waitForTransaction(server, sendRes.hash, 6, 1000);
+      // Wait up to 4s so total execution stays safely under Vercel Hobby 10s limit
+      finalTx = await waitForTransaction(server, sendRes.hash, 4, 1000);
     } catch {
-      // Si el ledger tarda más de 6s, devolvemos 202 Accepted con hash para evitar timeout en Vercel
+      // Si el ledger tarda más de 4s, devolvemos 202 Accepted con hash para evitar timeout en Vercel
       return res.status(202).json({
         ok: true,
         hash: sendRes.hash,

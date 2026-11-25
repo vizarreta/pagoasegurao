@@ -2,9 +2,23 @@ import { VercelRequest, VercelResponse } from '@vercel/node';
 import { Keypair, Asset, TransactionBuilder, Operation, rpc, StrKey } from '@stellar/stellar-sdk';
 import { getConfig, fetchHorizonBalances, waitForTransaction } from './_config.js';
 
+// Known limitation: in Vercel serverless (stateless per-invocation containers),
+// this Map only enforces rate-limiting within a warm container instance and resets
+// on cold starts. Acceptable for zero-value testnet tokens (Friendbot also enforces
+// upstream limits); production would use Redis/Vercel KV.
 const rateLimitMap = new Map<string, number>();
 const COOLDOWN_MS = 10_000;
+const IP_BURST_COOLDOWN_MS = 2_000;
 const FAUCET_AMOUNT = '200.0000000'; // S/ 200.00 (200 tPEN de prueba)
+
+function recordRateLimit(key: string, now: number) {
+  if (rateLimitMap.size > 500) {
+    for (const [k, ts] of rateLimitMap.entries()) {
+      if (now - ts > COOLDOWN_MS) rateLimitMap.delete(k);
+    }
+  }
+  rateLimitMap.set(key, now);
+}
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -78,10 +92,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
     }
 
-    // 3. Rate-limit test Soles faucet minting
+    // 3. Rate-limit test Soles faucet minting (per-account + burst check on real IP)
     const now = Date.now();
-    const lastTs = rateLimitMap.get(account) || 0;
-    if (now - lastTs < COOLDOWN_MS) {
+    const forwarded = req.headers['x-forwarded-for'];
+    const rawIp = Array.isArray(forwarded) ? forwarded[0] : forwarded;
+    const clientIp = rawIp ? rawIp.split(',')[0].trim() : '';
+    const accountKey = `acct:${account}`;
+    const ipKey = clientIp ? `ip:${clientIp}` : '';
+    const lastTsAccount = rateLimitMap.get(accountKey) || 0;
+    const lastTsIp = ipKey ? rateLimitMap.get(ipKey) || 0 : 0;
+    if (now - lastTsAccount < COOLDOWN_MS || (ipKey && now - lastTsIp < IP_BURST_COOLDOWN_MS)) {
       return res.status(429).json({
         ok: false,
         error: 'Espera unos segundos antes de solicitar más Soles de prueba (tPEN).',
@@ -133,7 +153,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
     }
 
-    rateLimitMap.set(account, Date.now());
+    const mintedAt = Date.now();
+    recordRateLimit(accountKey, mintedAt);
+    if (ipKey) recordRateLimit(ipKey, mintedAt);
     const updated = await fetchHorizonBalances(account, config.tokenIssuer, config.horizonUrl, config.assetCode);
 
     return res.status(200).json({

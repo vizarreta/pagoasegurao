@@ -49,6 +49,7 @@ pub enum Error {
     InvalidSignature = 8,
     Unauthorized = 9,
     InvalidExpiry = 10,
+    AlreadyInitialized = 11,
 }
 
 #[contractevent]
@@ -106,7 +107,7 @@ pub struct PagoAsegurao;
 impl PagoAsegurao {
     pub fn initialize(env: Env, token: Address) {
         if env.storage().instance().has(&DataKey::Token) {
-            panic_with_error!(&env, Error::VaultExists);
+            panic_with_error!(&env, Error::AlreadyInitialized);
         }
         env.storage().instance().set(&DataKey::Token, &token);
         extend_instance_ttl(&env);

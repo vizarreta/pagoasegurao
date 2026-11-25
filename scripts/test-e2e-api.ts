@@ -161,9 +161,20 @@ async function main() {
       signature: voucher.signature,
     },
   });
-  assert(r1.statusCode === 200 && r1.body.ok && r1.body.hash, `redeem failed: ${JSON.stringify(r1)}`);
+  assert(
+    (r1.statusCode === 200 || r1.statusCode === 202) && r1.body.ok && r1.body.hash,
+    `redeem failed: ${JSON.stringify(r1)}`
+  );
+  if (r1.statusCode === 202) {
+    // Poll briefly until ledger finality if relayer returned 202 PENDING
+    for (let i = 0; i < 12; i++) {
+      await new Promise((r) => setTimeout(r, 1500));
+      const bal = await fetchAccountBalances(merchantKp.publicKey());
+      if ((parseAmountToStroops(bal.balance) ?? 0n) === 150_000_000n) break;
+    }
+  }
   const mBal1 = await fetchAccountBalances(merchantKp.publicKey());
-  assert(Number(mBal1.balance) === 15, `merchant balance expected 15, got ${mBal1.balance}`);
+  assert((parseAmountToStroops(mBal1.balance) ?? 0n) === 150_000_000n, `merchant balance expected 15, got ${mBal1.balance}`);
   console.log(`   ✓ Liquidado en Stellar Testnet: ${r1.body.explorerUrl}`);
   console.log(`   ✓ Saldo comercio en Horizon: S/ 0.00 -> S/ ${mBal1.balance} tPEN`);
 

@@ -21,12 +21,13 @@
   - `stellar.ts`: configuración pública del contrato, serialización canónica, firma/verificación Ed25519, aritmética decimal exacta con `BigInt` stroops (`formatSoles`), y llamadas reales a Testnet (`changeTrust`, `open_vault`, `top_up`, `close_vault`, consultas Horizon y relayer).
   - `voucher.ts` y `qr.ts`: codificación compacta base64url de `QR-A` (`SSC1.`, 69 chars) y `QR-B` (`SSV1.`, 208 chars) y verificación local sin conexión.
   - `storage.ts`: IndexedDB v3 (`idb`) con almacenes separados (`keys`, `vault`, `client_vouchers`, `merchant_vouchers`, `vault_cache`).
-- `src/screens/`: `cliente.tsx` y `comercio.tsx`.
+  - `src/screens/`: `cliente.tsx` (reconciliación on-chain `is_redeemed` + liberación de retenciones vencidas y estado de vales) y `comercio.tsx` (cola IndexedDB y persistencia de cobro activo).
 - `src/components/QRScanner.tsx`: escaneo por cámara con `html5-qrcode` + entrada manual/portapapeles.
 
 ### 3. Relayer Serverless (`api/`)
 - Funciones serverless TypeScript ESM nativo para Vercel (`vercel.json`):
-  - `POST /api/redeem`: idempotencia (`is_redeemed`), verificación de trustline `tPEN` del comercio, simulación Soroban, mapeo de errores `#1`–`#10` a español, patrocinio de comisiones con `RELAYER_SECRET` y confirmación en ledger.
+  - `api/_errors.ts`: tabla única `CONTRACT_ERROR_MAP` (`#1`–`#11`) compartida entre relayer y PWA.
+  - `POST /api/redeem`: idempotencia (`is_redeemed`), verificación de trustline `tPEN` del comercio, simulación Soroban con reintentos ante fallos transitorios RPC, traducción de errores `#1`–`#11` a español, patrocinio de comisiones con `RELAYER_SECRET` y respuesta `200`/`202 PENDING` dentro del límite de Vercel Hobby.
   - `POST /api/faucet`: fondeo XLM vía Friendbot, verificación de trustline y emisión de `S/ 200.00` (`200 tPEN` de prueba) desde `ISSUER_SECRET` con rate limit.
   - `GET /api/vault/:signer`: simulación de lectura `get_vault` en Soroban y saldos reales en Horizon.
 - Claves secretas (`RELAYER_SECRET`, `ISSUER_SECRET`) únicamente en variables de entorno; nunca en el repositorio.

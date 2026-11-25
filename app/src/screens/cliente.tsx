@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import {
   TESTNET_CONFIG,
@@ -11,6 +11,7 @@ import {
   topUpVaultOnChain,
   closeVaultOnChain,
   fetchVaultFromRelayer,
+  checkVoucherRedeemedOnChain,
   parseAmountToStroops,
   formatStroops,
   formatSoles,
@@ -23,10 +24,12 @@ import {
   deleteVault,
   saveClientVoucher,
   getClientVouchers,
+  updateClientVoucherStatus,
   KeyRecord,
   VaultRecord,
   VoucherRecord,
 } from '../lib/storage';
+import { generateNonce } from '../lib/qr';
 import { decodeQRA, encodeQRB, QRAPayload } from '../lib/voucher';
 import { QRScanner } from '../components/QRScanner';
 import {
@@ -51,6 +54,28 @@ interface StatusAlert {
   type: 'ok' | 'error' | 'info' | 'warning';
   text: string;
   txHash?: string;
+}
+
+function computeAvailableVaultBalance(
+  vault: VaultRecord,
+  vouchers: VoucherRecord[],
+  nowSeconds: number
+): bigint {
+  if (vault.onChainBalance !== undefined) {
+    const base = BigInt(vault.onChainBalance);
+    const activeHold = vouchers
+      .filter(
+        (v) =>
+          v.signer === vault.signer &&
+          v.status === 'pendiente' &&
+          Number(v.expiry) >= nowSeconds &&
+          Number(v.expiry) <= vault.expiresAt &&
+          (!vault.openedAt || v.createdAt >= vault.openedAt)
+      )
+      .reduce((acc, v) => acc + BigInt(v.amount), 0n);
+    return base > activeHold ? base - activeHold : 0n;
+  }
+  return BigInt(vault.balance);
 }
 
 export default function ClienteScreen() {
@@ -80,66 +105,55 @@ export default function ClienteScreen() {
   const [history, setHistory] = useState<VoucherRecord[]>([]);
   const [nowSec, setNowSec] = useState<number>(() => Math.floor(Date.now() / 1000));
 
-  useEffect(() => {
-    loadLocalState();
-  }, []);
-
-  useEffect(() => {
-    if (!vaultRecord) return;
-    const timer = setInterval(() => {
-      setNowSec(Math.floor(Date.now() / 1000));
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [vaultRecord]);
-
-  async function loadLocalState() {
-    try {
-      const savedKey = await getKeys('client');
-      if (savedKey) {
-        setKeyRecord(savedKey);
-        setStep('boveda');
-        const savedVault = await getVault('client_vault');
-        if (savedVault) {
-          setVaultRecord(savedVault);
-        }
-        if (typeof navigator === 'undefined' || navigator.onLine) {
-          syncFromChain(savedKey.publicKey, true);
-        }
-      }
-      const allVouchers = await getClientVouchers();
-      setHistory(allVouchers.sort((a, b) => b.createdAt - a.createdAt));
-    } catch (e) {
-      console.error('Error loading client state', e);
-    }
-  }
-
-  async function syncFromChain(pubKey: string, silent = false) {
+  const syncFromChain = useCallback(async (pubKey: string, silent = false) => {
     if (!silent) setBusyAction('sync');
     try {
       const remote = await fetchVaultFromRelayer(pubKey);
       setBalances(remote.balances);
+      const localVault = await getVault('client_vault');
+      const allVouchers = await getClientVouchers();
+      const now = Math.floor(Date.now() / 1000);
+
+      // Reconcile pending vouchers against Soroban is_redeemed + expiry
+      const pendingForSigner = allVouchers.filter((v) => v.signer === pubKey && v.status === 'pendiente');
+      if (pendingForSigner.length > 0) {
+        await Promise.all(
+          pendingForSigner.map(async (v) => {
+            const redeemed = await checkVoucherRedeemedOnChain(pubKey, v.nonce);
+            if (redeemed === true) {
+              await updateClientVoucherStatus(v.id, 'liquidado');
+            } else if (now > Number(v.expiry) && redeemed === false) {
+              await updateClientVoucherStatus(v.id, 'rechazado', undefined, 'Vencido sin canjear');
+            } else if (!remote.exists && redeemed === false) {
+              await updateClientVoucherStatus(v.id, 'rechazado', undefined, 'Bóveda cerrada');
+            }
+          })
+        );
+      }
+
+      const freshVouchers = (await getClientVouchers()).sort((a, b) => b.createdAt - a.createdAt);
+      setHistory(freshVouchers);
+
       if (remote.exists && remote.vault) {
-        const localVault = await getVault('client_vault');
-        let effectiveBalance = BigInt(remote.vault.balance);
-        if (localVault && localVault.expiresAt === remote.vault.expiresAt) {
-          const localBal = BigInt(localVault.balance);
-          if (localBal < effectiveBalance) {
-            effectiveBalance = localBal;
-          }
-        }
-        const merged: VaultRecord = {
+        const mergedBase: VaultRecord = {
           signer: pubKey,
           owner: remote.vault.owner,
-          balance: effectiveBalance.toString(),
+          balance: remote.vault.balance,
+          onChainBalance: remote.vault.balance,
           expiresAt: remote.vault.expiresAt,
           maxPerVoucher: remote.vault.maxPerVoucher,
           openTxHash: localVault?.openTxHash,
+          openedAt: localVault && localVault.expiresAt === remote.vault.expiresAt ? localVault.openedAt : undefined,
           lastSyncedAt: remote.syncedAt,
+        };
+        const effectiveBalance = computeAvailableVaultBalance(mergedBase, freshVouchers, now);
+        const merged: VaultRecord = {
+          ...mergedBase,
+          balance: effectiveBalance.toString(),
         };
         await saveVault('client_vault', merged);
         setVaultRecord(merged);
       } else {
-        const localVault = await getVault('client_vault');
         if (localVault) {
           await deleteVault('client_vault');
           setVaultRecord(null);
@@ -162,7 +176,50 @@ export default function ClienteScreen() {
     } finally {
       if (!silent) setBusyAction(null);
     }
-  }
+  }, []);
+
+  const loadLocalState = useCallback(async () => {
+    try {
+      const savedKey = await getKeys('client');
+      if (savedKey) {
+        setKeyRecord(savedKey);
+        setStep('boveda');
+        const savedVault = await getVault('client_vault');
+        if (savedVault) {
+          setVaultRecord(savedVault);
+        }
+        if (typeof navigator === 'undefined' || navigator.onLine) {
+          syncFromChain(savedKey.publicKey, true);
+        }
+      }
+      const allVouchers = await getClientVouchers();
+      setHistory(allVouchers.sort((a, b) => b.createdAt - a.createdAt));
+    } catch (e) {
+      console.error('Error loading client state', e);
+    }
+  }, [syncFromChain]);
+
+  useEffect(() => {
+    loadLocalState();
+  }, [loadLocalState]);
+
+  useEffect(() => {
+    if (!vaultRecord) return;
+    const timer = setInterval(() => {
+      setNowSec(Math.floor(Date.now() / 1000));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [vaultRecord]);
+
+  useEffect(() => {
+    const handleOnline = () => {
+      if (keyRecord) {
+        syncFromChain(keyRecord.publicKey, true);
+      }
+    };
+    window.addEventListener('online', handleOnline);
+    return () => window.removeEventListener('online', handleOnline);
+  }, [keyRecord, syncFromChain]);
 
   const handleCopy = async (text: string, id: string) => {
     try {
@@ -261,9 +318,11 @@ export default function ClienteScreen() {
         signer: keyRecord.publicKey,
         owner: keyRecord.publicKey,
         balance: units.toString(),
+        onChainBalance: units.toString(),
         expiresAt,
         maxPerVoucher: maxUnits.toString(),
         openTxHash: txHash,
+        openedAt: Date.now(),
         lastSyncedAt: Date.now(),
       };
       await saveVault('client_vault', vRecord);
@@ -305,11 +364,21 @@ export default function ClienteScreen() {
     try {
       const kp = keypairFromSecret(keyRecord.secretKey);
       const txHash = await topUpVaultOnChain(kp, units);
-      const updatedBalance = BigInt(vaultRecord.balance) + units;
-      const updatedVault: VaultRecord = {
+      const currentOnChain = BigInt(vaultRecord.onChainBalance ?? vaultRecord.balance);
+      const newOnChain = currentOnChain + units;
+      const baseUpdated: VaultRecord = {
         ...vaultRecord,
-        balance: updatedBalance.toString(),
+        onChainBalance: newOnChain.toString(),
         lastSyncedAt: Date.now(),
+      };
+      const updatedBalance = computeAvailableVaultBalance(
+        baseUpdated,
+        history,
+        Math.floor(Date.now() / 1000)
+      );
+      const updatedVault: VaultRecord = {
+        ...baseUpdated,
+        balance: updatedBalance.toString(),
       };
       await saveVault('client_vault', updatedVault);
       setVaultRecord(updatedVault);
@@ -345,6 +414,14 @@ export default function ClienteScreen() {
       const txHash = await closeVaultOnChain(kp);
       await deleteVault('client_vault');
       setVaultRecord(null);
+      const pendingVouchers = (await getClientVouchers()).filter(
+        (v) => v.signer === keyRecord.publicKey && v.status === 'pendiente'
+      );
+      for (const pv of pendingVouchers) {
+        await updateClientVoucherStatus(pv.id, 'rechazado', undefined, 'Bóveda cerrada');
+      }
+      const updatedHistory = (await getClientVouchers()).sort((a, b) => b.createdAt - a.createdAt);
+      setHistory(updatedHistory);
       const freshBal = await fetchAccountBalances(keyRecord.publicKey);
       setBalances(freshBal);
       setStatusMsg({
@@ -384,7 +461,7 @@ export default function ClienteScreen() {
       return;
     }
 
-    const currentBalance = BigInt(vaultRecord.balance);
+    const currentBalance = computeAvailableVaultBalance(vaultRecord, history, now);
     const maxAllowed = BigInt(vaultRecord.maxPerVoucher);
 
     if (payload.amount <= 0n) {
@@ -419,20 +496,26 @@ export default function ClienteScreen() {
     try {
       const kp = keypairFromSecret(keyRecord.secretKey);
       const expiry = BigInt(vaultRecord.expiresAt);
+      const now = Math.floor(Date.now() / 1000);
+
+      // Avoid any local nonce reuse
+      const existingVouchers = await getClientVouchers();
+      const usedNonces = new Set(
+        existingVouchers.filter((v) => v.signer === keyRecord.publicKey).map((v) => v.nonce)
+      );
+      let uniqueNonce = generateNonce();
+      while (usedNonces.has(uniqueNonce.toString())) {
+        uniqueNonce = generateNonce();
+      }
 
       const { qrString, voucher } = encodeQRB(
         TESTNET_CONFIG.contractId,
         kp,
         scannedQRA.merchantAddress,
         scannedQRA.amount,
-        expiry
+        expiry,
+        uniqueNonce
       );
-
-      const currentBalance = BigInt(vaultRecord.balance);
-      const newBalance = currentBalance - scannedQRA.amount;
-      const updatedVault: VaultRecord = { ...vaultRecord, balance: newBalance.toString() };
-      await saveVault('client_vault', updatedVault);
-      setVaultRecord(updatedVault);
 
       const vRecord: VoucherRecord = {
         id: `client-voucher-${voucher.nonce}`,
@@ -447,7 +530,19 @@ export default function ClienteScreen() {
         createdAt: Date.now(),
       };
       await saveClientVoucher(vRecord);
-      setHistory((prev) => [vRecord, ...prev]);
+      const nextVouchers = [vRecord, ...existingVouchers].sort((a, b) => b.createdAt - a.createdAt);
+      setHistory(nextVouchers);
+
+      const currentBalance = BigInt(vaultRecord.balance);
+      const newBalance =
+        vaultRecord.onChainBalance !== undefined
+          ? computeAvailableVaultBalance(vaultRecord, nextVouchers, now)
+          : currentBalance > scannedQRA.amount
+          ? currentBalance - scannedQRA.amount
+          : 0n;
+      const updatedVault: VaultRecord = { ...vaultRecord, balance: newBalance.toString() };
+      await saveVault('client_vault', updatedVault);
+      setVaultRecord(updatedVault);
 
       setGeneratedQRB(qrString);
       setLastPaidAmount(formatSoles(scannedQRA.amount));
@@ -465,6 +560,9 @@ export default function ClienteScreen() {
   const isVaultExpired = vaultRecord ? nowSec >= vaultRecord.expiresAt : false;
   const secondsUntilExpiry = vaultRecord ? Math.max(0, vaultRecord.expiresAt - nowSec) : 0;
   const walletBalanceStroops = balances?.balance ? (parseAmountToStroops(balances.balance) ?? 0n) : 0n;
+  const spendableVaultBalance = vaultRecord
+    ? computeAvailableVaultBalance(vaultRecord, history, nowSec)
+    : 0n;
 
   return (
     <div className="cliente-container">
@@ -593,7 +691,7 @@ export default function ClienteScreen() {
             <div className="vault-balance-display">
               <span className="label">Saldo disponible para pagar offline:</span>
               <span className="balance-amount">
-                S/ {vaultRecord ? formatStroops(vaultRecord.balance) : '0.00'} <small>tPEN</small>
+                S/ {vaultRecord ? formatStroops(spendableVaultBalance) : '0.00'} <small>tPEN</small>
               </span>
               {vaultRecord ? (
                 <>
@@ -617,7 +715,7 @@ export default function ClienteScreen() {
             <div className="action-buttons-grid">
               <button
                 className="btn btn-action-pay"
-                disabled={!vaultRecord || isVaultExpired || BigInt(vaultRecord.balance) <= 0n}
+                disabled={!vaultRecord || isVaultExpired || spendableVaultBalance <= 0n}
                 onClick={() => setScanningQRA(true)}
               >
                 <QrCode size={20} />
@@ -823,34 +921,51 @@ export default function ClienteScreen() {
                 <h4>Vales Emitidos ({history.length})</h4>
               </div>
               <ul className="history-list">
-                {history.map((v) => (
-                  <li key={v.id} className="history-item">
-                    <div className="item-info">
-                      <span className="item-merchant">
-                        Para: {v.merchant.slice(0, 6)}...{v.merchant.slice(-4)}
-                      </span>
-                      <span className="item-date">
-                        {new Date(v.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                      </span>
-                    </div>
-                    <div className="history-right">
-                      <span className="item-amount">- {formatSoles(v.amount)}</span>
-                      {v.qrString && (
-                        <button
-                          type="button"
-                          className="btn-chip"
-                          onClick={() => {
-                            setGeneratedQRB(v.qrString!);
-                            setLastPaidAmount(formatSoles(v.amount));
-                            setStep('show_qrb');
-                          }}
-                        >
-                          <QrCode size={12} /> Ver QR
-                        </button>
-                      )}
-                    </div>
-                  </li>
-                ))}
+                {history.map((v) => {
+                  const isExpiredUnredeemed = v.status === 'pendiente' && nowSec > Number(v.expiry);
+                  const badgeStatus =
+                    v.status === 'liquidado'
+                      ? 'liquidado'
+                      : v.status === 'rechazado' || isExpiredUnredeemed
+                      ? 'rechazado'
+                      : 'pendiente';
+                  const badgeLabel =
+                    v.status === 'liquidado'
+                      ? 'Liquidado'
+                      : v.status === 'rechazado' || isExpiredUnredeemed
+                      ? v.error || 'Vencido'
+                      : 'Pendiente';
+
+                  return (
+                    <li key={v.id} className="history-item">
+                      <div className="item-info">
+                        <span className="item-merchant">
+                          Para: {v.merchant.slice(0, 6)}...{v.merchant.slice(-4)}
+                        </span>
+                        <span className="item-date">
+                          {new Date(v.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                        <span className={`status-badge status-${badgeStatus}`}>{badgeLabel}</span>
+                      </div>
+                      <div className="history-right">
+                        <span className="item-amount">- {formatSoles(v.amount)}</span>
+                        {v.qrString && v.status === 'pendiente' && !isExpiredUnredeemed && (
+                          <button
+                            type="button"
+                            className="btn-chip"
+                            onClick={() => {
+                              setGeneratedQRB(v.qrString!);
+                              setLastPaidAmount(formatSoles(v.amount));
+                              setStep('show_qrb');
+                            }}
+                          >
+                            <QrCode size={12} /> Ver QR
+                          </button>
+                        )}
+                      </div>
+                    </li>
+                  );
+                })}
               </ul>
             </div>
           )}
