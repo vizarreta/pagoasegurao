@@ -178,11 +178,25 @@ export function decodeQRB(qrString: string): QRBPayload | null {
   }
 }
 
+export function validateVoucherVaultExpiry(
+  voucherExpiry: bigint,
+  vaultExpiresAt?: bigint
+): { valid: boolean; error?: string } {
+  if (vaultExpiresAt !== undefined && voucherExpiry > vaultExpiresAt) {
+    return {
+      valid: false,
+      error: 'El vencimiento del vale supera la fecha límite de la bóveda',
+    };
+  }
+  return { valid: true };
+}
+
 export function verifyVoucherLocally(
   contractAddress: string,
   payload: QRBPayload,
   expectedMerchantAddress: string,
-  expectedAmount?: bigint
+  expectedAmount?: bigint,
+  vaultExpiresAt?: bigint
 ): { valid: boolean; error?: string } {
   if (payload.merchantAddress !== expectedMerchantAddress) {
     return { valid: false, error: 'El comercio receptor no coincide con tu cuenta' };
@@ -198,6 +212,11 @@ export function verifyVoucherLocally(
   const nowSeconds = BigInt(Math.floor(Date.now() / 1000));
   if (nowSeconds > payload.expiry) {
     return { valid: false, error: 'El vale está vencido' };
+  }
+
+  const vaultExpiryCheck = validateVoucherVaultExpiry(payload.expiry, vaultExpiresAt);
+  if (!vaultExpiryCheck.valid) {
+    return vaultExpiryCheck;
   }
 
   const msg = buildCanonicalMessage(

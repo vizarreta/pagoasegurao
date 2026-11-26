@@ -25,7 +25,7 @@ import {
   VoucherRecord,
   CachedVaultRecord,
 } from '../lib/storage';
-import { encodeQRA, decodeQRB, verifyVoucherLocally } from '../lib/voucher';
+import { encodeQRA, decodeQRB, verifyVoucherLocally, validateVoucherVaultExpiry } from '../lib/voucher';
 import { checkVoucherRedeemedOnChain } from '../lib/stellar';
 import { QRScanner } from '../components/QRScanner';
 import {
@@ -345,6 +345,7 @@ export default function ComercioScreen() {
     }
 
     let vaultInfo: CachedVaultRecord | null = (await getVaultCache(payload.signerAddress)) || null;
+    let fetchedLiveVault = false;
     if (typeof navigator !== 'undefined' && navigator.onLine) {
       try {
         const remote = await fetchVaultFromRelayer(payload.signerAddress);
@@ -357,11 +358,27 @@ export default function ComercioScreen() {
             maxPerVoucher: remote.vault.maxPerVoucher,
             syncedAt: remote.syncedAt,
           };
+          fetchedLiveVault = true;
           await saveVaultCache(vaultInfo);
         }
       } catch {
         // Offline or RPC slow
       }
+    }
+
+    // Only enforce cached expiry if live or still active (an expired cache could predate a new vault offline)
+    const nowSec = Math.floor(Date.now() / 1000);
+    const enforceableVaultExpiry =
+      vaultInfo && (fetchedLiveVault || vaultInfo.expiresAt >= nowSec)
+        ? BigInt(vaultInfo.expiresAt)
+        : undefined;
+    const vaultExpiryCheck = validateVoucherVaultExpiry(payload.expiry, enforceableVaultExpiry);
+    if (!vaultExpiryCheck.valid) {
+      setStatusMsg({
+        type: 'error',
+        text: `Vale rechazado: ${vaultExpiryCheck.error}`,
+      });
+      return;
     }
 
     let highRiskWarning: string | undefined;

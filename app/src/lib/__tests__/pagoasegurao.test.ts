@@ -97,6 +97,24 @@ describe('Compact QR encoding and offline Ed25519 voucher verification', () => {
     const ok = verifyVoucherLocally(TESTNET_CONFIG.contractId, decodedB, merchantKp.publicKey(), amount);
     assert.equal(ok.valid, true);
 
+    // Voucher expiry within vault expires_at passes; exceeding vault expires_at fails
+    const withinVault = verifyVoucherLocally(
+      TESTNET_CONFIG.contractId,
+      decodedB,
+      merchantKp.publicKey(),
+      amount,
+      futureExpiry
+    );
+    assert.equal(withinVault.valid, true);
+    const beyondVault = verifyVoucherLocally(
+      TESTNET_CONFIG.contractId,
+      decodedB,
+      merchantKp.publicKey(),
+      amount,
+      futureExpiry - 10n
+    );
+    assert.equal(beyondVault.valid, false);
+
     // Wrong merchant fails
     const otherMerchant = randomKeypair();
     const wrongMerchant = verifyVoucherLocally(TESTNET_CONFIG.contractId, decodedB, otherMerchant.publicKey(), amount);
