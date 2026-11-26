@@ -191,6 +191,66 @@ export function validateVoucherVaultExpiry(
   return { valid: true };
 }
 
+export function evaluateClientExposure(
+  signerAddress: string,
+  newVoucherAmount: bigint,
+  existingQueue: Array<{ signer: string; amount: string; status: string }>,
+  cachedVault?: { balance: string; expiresAt: number } | null,
+  isLiveFetch = false,
+  nowSeconds = Math.floor(Date.now() / 1000)
+): { priorPendingStroops: bigint; projectedTotalStroops: bigint; exceedingWarning?: string } {
+  const priorPendingStroops = existingQueue
+    .filter((v) => v.signer === signerAddress && v.status === 'pendiente')
+    .reduce((acc, v) => acc + BigInt(v.amount), 0n);
+  const projectedTotalStroops = priorPendingStroops + newVoucherAmount;
+
+  if (cachedVault && (isLiveFetch || cachedVault.expiresAt >= nowSeconds)) {
+    const knownBalance = BigInt(cachedVault.balance);
+    if (projectedTotalStroops > knownBalance) {
+      const exceedingWarning =
+        priorPendingStroops > 0n
+          ? `Advertencia: este cliente acumula ${formatSoles(priorPendingStroops)} pendiente en tu cola; con este cobro suma ${formatSoles(projectedTotalStroops)} y supera el saldo conocido de su bóveda (${formatSoles(knownBalance)}).`
+          : `Advertencia: según la última sincronización, la bóveda tenía ${formatSoles(knownBalance)} (menor al vale de ${formatSoles(newVoucherAmount)}).`;
+      return { priorPendingStroops, projectedTotalStroops, exceedingWarning };
+    }
+  }
+
+  return { priorPendingStroops, projectedTotalStroops };
+}
+
+export function getVoucherUrgency(
+  expirySeconds: number | string | bigint,
+  nowSeconds = Math.floor(Date.now() / 1000)
+): { remainingSec: number; level: 'ok' | 'warn' | 'critical' | 'expired'; label: string } {
+  const remainingSec = Number(expirySeconds) - nowSeconds;
+  if (remainingSec <= 0) {
+    return { remainingSec: 0, level: 'expired', label: 'Vencido' };
+  }
+  const days = Math.floor(remainingSec / 86400);
+  const hours = Math.floor((remainingSec % 86400) / 3600);
+  const mins = Math.floor((remainingSec % 3600) / 60);
+  const secs = remainingSec % 60;
+
+  let timeText: string;
+  if (days > 0) {
+    timeText = `${days}d ${hours}h`;
+  } else if (hours > 0) {
+    timeText = `${hours}h ${mins}m`;
+  } else if (mins > 0) {
+    timeText = `${mins}m ${secs}s`;
+  } else {
+    timeText = `${secs}s`;
+  }
+
+  if (remainingSec <= 300) {
+    return { remainingSec, level: 'critical', label: `Vence en ${timeText}` };
+  }
+  if (remainingSec < 7200) {
+    return { remainingSec, level: 'warn', label: `Vence en ${timeText}` };
+  }
+  return { remainingSec, level: 'ok', label: `Vigente · ${timeText}` };
+}
+
 export function verifyVoucherLocally(
   contractAddress: string,
   payload: QRBPayload,

@@ -163,8 +163,8 @@ pnpm build
 20. `test_redeem_zero_amount_fails`
 21. `test_double_initialize_fails`
 
-### App y Lógica Criptográfica (`pnpm test:app`) — **8 / 8 pasando**
-Valida en TypeScript estricto (`node --test` + `tsx`): aritmética exacta en `BigInt` stroops (7 decimales, sin floats), mapeo unificado de errores Soroban `#1`–`#11` (`api/_errors.ts`), codificación compacta base64url `QR-A` (`SSC1.`) y `QR-B` (`SSV1.`), verificación Ed25519 local offline y coincidencia byte-a-byte con `contracts/pagoasegurao/test-vectors/voucher.json`.
+### App y Lógica Criptográfica (`pnpm test:app`) — **9 / 9 pasando**
+Valida en TypeScript estricto (`node --test` + `tsx`): aritmética exacta en `BigInt` stroops (7 decimales, sin floats), mapeo unificado de errores Soroban `#1`–`#11` (`api/_errors.ts`), codificación compacta base64url `QR-A` (`SSC1.`) y `QR-B` (`SSV1.`), verificación Ed25519 local offline (incluyendo `voucher.expiry <= vault.expires_at`), exposición acumulada por cliente, etiquetas de vigencia y coincidencia byte-a-byte con `contracts/pagoasegurao/test-vectors/voucher.json`.
 
 ### Suite End-to-End en vivo (`pnpm test:e2e`) — **12 / 12 pasando en Stellar Testnet (`S/` · `tPEN`)**
 Valida en vivo: onboarding cliente y comercio (`/api/faucet` + trustline `tPEN`), `open_vault`, `GET /api/vault/:signer`, flujo offline `QR-A -> QR-B` con verificación Ed25519 local, `POST /api/redeem` patrocinado por relayer, rechazos con mensaje claro en español (doble canje HTTP 409, monto sobre tope `#3`, vale vencido `#2`, firma alterada `#8`), `top_up`, rechazo de cierre anticipado (`#6`) y `close_vault` tras vencimiento con devolución de Soles de prueba.

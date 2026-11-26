@@ -14,7 +14,15 @@ import {
 } from '../stellar';
 import { CONTRACT_ERROR_MAP, parseContractError } from '../../../../api/_errors';
 import { base64urlEncode, base64urlDecode, generateNonce, generateRequestId } from '../qr';
-import { encodeQRA, decodeQRA, encodeQRB, decodeQRB, verifyVoucherLocally } from '../voucher';
+import {
+  encodeQRA,
+  decodeQRA,
+  encodeQRB,
+  decodeQRB,
+  verifyVoucherLocally,
+  evaluateClientExposure,
+  getVoucherUrgency,
+} from '../voucher';
 
 describe('Fixed-point BigInt Soles (tPEN) arithmetic', () => {
   it('parses decimal strings into exact 7-decimal stroops without floats', () => {
@@ -152,6 +160,41 @@ describe('Compact QR encoding and offline Ed25519 voucher verification', () => {
     assert.ok(decoded);
     const check = verifyVoucherLocally(TESTNET_CONFIG.contractId, decoded, merchantKp.publicKey(), 50_000_000n);
     assert.equal(check.valid, false);
+  });
+
+  it('tracks cumulative offline exposure per client and formats urgency labels safely for short demos', () => {
+    const now = 1_700_000_000;
+    const exposure = evaluateClientExposure(
+      'GCLIENT',
+      200_000_000n, // S/ 20
+      [
+        { signer: 'GCLIENT', amount: '150000000', status: 'pendiente' }, // S/ 15 pending
+        { signer: 'GCLIENT', amount: '500000000', status: 'liquidado' }, // ignored
+        { signer: 'GOTHER', amount: '900000000', status: 'pendiente' }, // ignored
+      ],
+      { balance: '300000000', expiresAt: now + 3600 }, // S/ 30 known balance
+      false,
+      now
+    );
+    assert.equal(exposure.priorPendingStroops, 150_000_000n);
+    assert.equal(exposure.projectedTotalStroops, 350_000_000n);
+    assert.ok(exposure.exceedingWarning && exposure.exceedingWarning.includes('acumula'));
+
+    // Stale expired vault cache should not trigger false offline warning
+    const staleExposure = evaluateClientExposure(
+      'GCLIENT',
+      200_000_000n,
+      [{ signer: 'GCLIENT', amount: '150000000', status: 'pendiente' }],
+      { balance: '100000000', expiresAt: now - 10 },
+      false,
+      now
+    );
+    assert.equal(staleExposure.exceedingWarning, undefined);
+
+    assert.equal(getVoucherUrgency(now - 1, now).level, 'expired');
+    assert.equal(getVoucherUrgency(now + 90, now).level, 'critical'); // 2-min demo window
+    assert.equal(getVoucherUrgency(now + 1800, now).level, 'warn');
+    assert.equal(getVoucherUrgency(now + 10000, now).level, 'ok');
   });
 });
 

@@ -1,65 +1,86 @@
 # SPEC — PagoAsegurao
 
-**Nombre:** *PagoAsegurao* = "pago asegurado" dicho como se habla en la calle. Transmite la idea central del producto: el comercio sabe que su cobro está respaldado por fondos ya apartados. Eslogan sugerido: "Tu pago, asegurao, con o sin señal".
+**Nombre:** *PagoAsegurao* = "pago asegurado" dicho como se habla en la calle. Transmite la idea central del producto: el comercio sabe que su cobro está respaldado por fondos ya apartados. Eslogan: **"Tu pago, asegurao, con o sin señal"**.
 
-**Cuidado con la promesa del nombre:** "asegurado" aplica a los fondos apartados en la bóveda, no a cualquier monto que un cliente deshonesto pudiera firmar offline (ver sección 3). En el README y en el video, decir siempre "asegurado hasta el monto apartado".
+**Cuidado con la promesa del nombre:** "asegurado" aplica a los fondos apartados en la bóveda, no a cualquier monto que un cliente deshonesto pudiera firmar offline (ver sección 3). En el README y en el video, decir siempre **"asegurado hasta el monto apartado"**.
 
-Pagos sin internet sobre Stellar testnet. Un cliente firma un vale offline, el comercio lo recibe por QR y lo liquida cuando recupera conexión; un contrato Soroban paga desde una bóveda de fondos apartados.
+Pagos sin internet sobre Stellar testnet en **Soles de prueba (`S/` · `tPEN`)**. Un cliente firma un vale offline, el comercio lo recibe por QR y lo liquida cuando recupera conexión; un contrato Soroban paga desde una bóveda de fondos apartados.
 
 ## 1. Problema y propuesta
 
-- **Problema:** en ferias, buses y zonas rurales la señal falla justo cuando hay que cobrar, y los pagos digitales dejan de funcionar.
-- **Propuesta:** el cliente aparta fondos en una bóveda del contrato *antes* de quedarse sin señal. Sin internet, firma vales que el comercio verifica localmente y liquida después. El contrato garantiza que cada vale se pague una sola vez, solo al comercio indicado y solo desde fondos ya apartados.
-- **Qué debe verse en la demo:** dos celulares en modo avión completan un pago (QR → QR); al reconectar, el comercio recibe los fondos y se ve la transacción en el explorador de Stellar.
+- **Problema:** en ferias itinerantes, mercados de abastos, buses y zonas rurales del Perú la señal falla justo cuando hay que cobrar, y los pagos digitales dejan de funcionar.
+- **Propuesta:** el cliente aparta fondos en una bóveda del contrato *antes* de quedarse sin señal. Sin internet, firma vales en Soles de prueba (`tPEN`) que el comercio verifica localmente y liquida después. El contrato garantiza que cada vale se pague una sola vez, solo al comercio indicado y solo desde fondos ya apartados.
+- **Qué debe verse en la demo:** dos celulares en modo avión completan un pago (`QR-A` → `QR-B`); al reconectar, el comercio recibe los fondos y se ve la transacción en `stellar.expert`.
 
 ## 2. Flujo de extremo a extremo
 
 ```
 FASE ONLINE (preparación)
-  Cliente: crea cuenta (testnet) → recibe tUSDC (activo de prueba) → open_vault(monto, vencimiento)
+  Cliente: crea cuenta (testnet) → activa trustline y recibe tPEN (S/ de prueba) → open_vault(monto, vencimiento, tope)
+  Comercio: activa cuenta y trustline tPEN (una sola vez)
 
-FASE OFFLINE (sin internet)
-  Comercio: ingresa monto → muestra QR-A (cobro)
-  Cliente:  escanea QR-A → revisa comercio y monto → confirma → firma vale → muestra QR-B
-  Comercio: escanea QR-B → verifica la firma localmente → "Pago recibido (pendiente de liquidar)"
-            → guarda el vale en una cola local
+FASE OFFLINE (sin internet / Modo Avión)
+  Comercio: ingresa monto en S/ → muestra QR-A (cobro)
+  Cliente:  escanea QR-A → revisa comercio y monto → confirma → firma vale Ed25519 → muestra QR-B
+  Comercio: escanea QR-B → verifica firma, monto, receptor y vigencia localmente → "Pago recibido (pendiente de liquidar)"
+            → guarda el vale en su cola local (IndexedDB)
 
 FASE ONLINE (liquidación)
-  Comercio → relayer: envía los vales de la cola
-  Relayer → contrato: redeem(vale, firma)  (el relayer paga la comisión)
-  Contrato → comercio: transfiere tUSDC desde la bóveda del cliente
+  Comercio → relayer: sincroniza los vales de la cola (auto-sync al abrir / reconectar o manual)
+  Relayer → contrato: redeem(vale, firma)  (el relayer patrocina la comisión)
+  Contrato → comercio: transfiere tPEN (S/) desde la bóveda del cliente
   Cliente: al vencer la bóveda, close_vault() devuelve el saldo no gastado
 ```
 
-**Decisión de diseño:** se usan dos QR (cobro del comercio y vale del cliente) en lugar de uno. Así el vale queda atado a un comercio y a un monto concretos, y nadie que vea el QR del cliente puede cobrarlo. Si el tiempo apremia, el MVP puede aceptar que el cliente ingrese comercio y monto manualmente, pero el vale siempre debe incluir al comercio.
+**Decisión de diseño:** se usan dos QR (`QR-A` cobro del comercio y `QR-B` vale del cliente) en lugar de uno. Así el vale queda atado a un comercio y a un monto concretos, y nadie que vea el QR del cliente puede cobrarlo.
 
 ## 3. Modelo de confianza (leer antes de diseñar)
 
 **Lo que el contrato garantiza:**
 
-- Un vale solo se paga una vez (nonce).
-- Solo se paga al comercio que figura en el vale.
-- Nunca se paga más que el saldo de la bóveda.
-- Un vale con firma inválida, vencido o por encima del tope por vale se rechaza.
-- El dueño no puede retirar fondos antes del vencimiento de la bóveda, así que los fondos apartados siguen disponibles para liquidar.
+- Un vale solo se paga una vez (nonce único en almacenamiento persistente).
+- Solo se paga al comercio que figura en el vale (`voucher.merchant`).
+- Nunca se paga más que el saldo de la bóveda (`vault.balance >= amount`).
+- Un vale con firma inválida, vencido (`now > voucher.expiry` o `voucher.expiry > vault.expires_at`), monto inválido o por encima del tope por vale se rechaza.
+- El dueño no puede retirar fondos antes del vencimiento de la bóveda (`now < vault.expires_at`), así que los fondos apartados siguen disponibles para liquidar.
 
 **Riesgo residual (documentarlo en el README, no esconderlo):**
 
 - Estando offline, nadie puede impedir que un cliente deshonesto firme más vales que su saldo. El contrato paga por orden de llegada y los que exceden el saldo fallan.
-- Mitigaciones del MVP: tope por vale (`max_per_voucher`); la app del cliente lleva un saldo local y se niega a firmar de más; la app del comercio muestra el saldo de la bóveda "según la última sincronización" y advierte si el vale es alto.
-- Ideas futuras (no implementar): reputación, límites por comercio, hardware seguro.
+- Mitigaciones del MVP: tope por vale (`max_per_voucher`); la app del cliente lleva un libro local (reconciliado con `is_redeemed` y expiración) y se niega a firmar de más; la app del comercio consulta/cachea la bóveda del cliente, suma vales pendientes acumulados de ese cliente y advierte si supera el saldo conocido.
+- Ideas futuras (fuera del MVP): reputación, límites por comercio, hardware seguro / Passkeys WebAuthn.
 
 **Otros límites conocidos:**
 
 - La clave de firma vive en el navegador (IndexedDB). Es aceptable solo para testnet y demo.
 - El relayer no puede mover fondos: solo envía vales ya firmados y gasta comisiones.
-- El comercio debe ser una cuenta Stellar normal (dirección G...) con trustline al activo.
+- El comercio debe ser una cuenta Stellar normal (dirección `G...`) con trustline a `tPEN`.
+
+### 3.1 Mitigaciones de producto (M1–M10)
+
+Prioridad: obligatorias (MVP) → recomendadas → mejoras futuras.
+
+**Implementadas en el MVP**
+- **M1 — Libro local y reconciliación del cliente:** calcula `saldo disponible = saldo on-chain − vales pendientes aún vigentes` y bloquea nuevas firmas si no alcanza. Al volver la señal consulta `is_redeemed` en Soroban y libera automáticamente saldos retenidos de vales que expiraron sin canjearse.
+- **M2 — Topes por diseño:** bóveda con monto y tope máximo por vale (`max_per_voucher <= amount`), con valores sugeridos (`S/ 100` bóveda, `S/ 30` tope/vale).
+- **M3 — Liquidación automática en el comercio:** sincroniza automáticamente al detectar el evento `online`, al abrir la app si ya hay internet y mediante botón manual, con bloqueo anti-concurrencia y reintentos transitorios RPC en el relayer.
+- **M4 — Cuenta regresiva y prioridad por urgencia:** la cola del comercio ordena vales pendientes por vencimiento más próximo, muestra un banner resumen y etiquetas de vigencia con color (verde, ámbar, rojo, vencido) **sin bloquear** bóvedas de prueba corta (`2 min`) para la demo.
+- **M7 — Reemisión desde historial:** el cliente puede volver a abrir el código `QR-B` de un vale pendiente vigente desde su historial.
+- **M8 — Ventana larga por defecto + corta para demo:** 72 horas (`3 días`) por defecto y opción de `2 minutos` para probar en vivo el vencimiento y `close_vault`.
+- **M9 — Control acumulado del comercio con `vault_cache`:** al recibir un `QR-B`, el comercio verifica `voucher.expiry <= vault.expires_at` cuando conoce la bóveda (en vivo o caché vigente) y advierte si `vales pendientes de ese cliente + vale nuevo > saldo conocido`.
+
+**Fuera de alcance del MVP actual (roadmap futuro)**
+- **M5 — PIN WebCrypto antes de firmar:** cifrar `secretKey` con PIN; se deja fuera del MVP para no entorpecer la demo en vivo ni migrar llaves demo existentes en IndexedDB.
+- **M6 — Segunda vía de liquidación desde cliente:** envío voluntario desde la app del cliente (solo manual para no liquidar por error un vale que nunca se entregó al comercio).
+- **M10 — Llaves separadas (`owner` vs `signer`):** el contrato ya separa `owner` y `signer`; para habilitarlo en producción se requerirá además autorización explícita de `signer` en `open_vault` para evitar secuestro de slots.
+
+**Regla de diseño:** no se permite cancelar una bóveda antes de `expires_at`, porque dejaría sin pago a comercios con vales válidos. La recuperación de fondos espera al vencimiento.
 
 ## 4. Contrato Soroban (`contracts/pagoasegurao`)
 
 ### 4.1 Activo
 
-Usar un activo de prueba propio llamado `tUSDC` (la "t" es de testnet) emitido por una cuenta de testnet del proyecto y envuelto con su Stellar Asset Contract (SAC). Así se pueden crear fondos de demo a voluntad. **No es un token con valor ni un lanzamiento de token:** es un activo de prueba sin valor económico, que simula un stablecoin como USDC. Declarar esto en el README y en el video. El contrato recibe la dirección del token al inicializarse, por lo que en el futuro podría apuntar al USDC real sin cambiar su lógica.
+Activo de prueba llamado `tPEN` (**Soles de prueba `S/`**, 7 decimales) emitido por una cuenta de testnet del proyecto y envuelto con su Stellar Asset Contract (SAC). **No es un token con valor ni un lanzamiento de token:** es un activo de prueba sin valor económico que representa Soles peruanos en el piloto. Declararlo en el README y en el video. El contrato recibe la dirección del token al inicializarse (`initialize(token)`), por lo que podría apuntar a USDC u otro stablecoin regulado en Stellar sin cambiar su lógica.
 
 ### 4.2 Estructuras
 
@@ -82,78 +103,72 @@ pub struct Voucher {
 }
 ```
 
-En el MVP, `signer` es la clave pública de la misma cuenta del cliente (una sola clave). Una "llave de gasto" separada queda como mejora opcional.
-
 ### 4.3 Funciones
 
 | Función | Quién la llama | Qué hace |
 |---|---|---|
-| `__constructor(token)` (o `initialize` si el constructor no está disponible) | despliegue | Guarda la dirección del token. |
-| `open_vault(owner, signer, amount, expires_at, max_per_voucher)` | cliente (`owner.require_auth()`) | Transfiere `amount` del cliente al contrato y crea la bóveda indexada por `signer`. Falla si ya existe una activa. |
-| `top_up(owner, signer, amount)` | cliente | Suma saldo a su bóveda. |
-| `redeem(voucher, signature)` | cualquiera (relayer o comercio) | Valida y paga al comercio. No exige autorización del comercio: el pago siempre va al `merchant` del vale. Esto permite que un relayer pague la comisión. |
-| `close_vault(owner, signer)` | cliente | Solo después de `expires_at`. Devuelve el saldo y borra la bóveda. |
-| `get_vault(signer)` | lectura | Devuelve la bóveda si existe. |
-| `is_redeemed(signer, nonce)` | lectura | Indica si el vale ya se canjeó. |
+| `initialize(token)` | despliegue | Guarda la dirección del token SAC; falla con `AlreadyInitialized (#11)` si ya fue inicializado. |
+| `get_token()` | lectura | Devuelve la dirección del token registrado. |
+| `open_vault(owner, signer, amount, expires_at, max_per_voucher)` | cliente (`owner.require_auth()`) | Valida `amount > 0`, `0 < max_per_voucher <= amount`, `expires_at > now` y que no exista bóveda; transfiere `amount` al contrato y crea `Vault(signer)` con TTL dinámico. |
+| `top_up(owner, signer, amount)` | cliente (`owner.require_auth()`) | Exige `vault.owner == owner`, `amount > 0` y `now < vault.expires_at`; suma saldo a la bóveda y extiende TTL. |
+| `redeem(voucher, signature)` | cualquiera (relayer o comercio) | Valida y paga al comercio (`voucher.merchant`). Permite *fee sponsorship* del relayer. |
+| `close_vault(owner, signer)` | cliente (`owner.require_auth()`) | Exige `vault.owner == owner` y `now >= vault.expires_at`. Devuelve el saldo y elimina `Vault(signer)`. |
+| `get_vault(signer)` | lectura | Devuelve `Option<Vault>`. |
+| `is_redeemed(signer, nonce)` | lectura | Indica si el vale ya se canjeó (`bool`). |
 
 ### 4.4 Mensaje canónico a firmar
 
-Debe ser **idéntico byte a byte** entre Rust y TypeScript:
+Idéntico byte a byte entre Rust y TypeScript (**161 bytes exactos**):
 
 ```
 msg = "PAGOASEGURAO1" (ASCII, 13 bytes)
-   || contract_address_xdr
-   || signer (32 bytes)
-   || merchant_address_xdr
-   || amount (i128, big-endian, 16 bytes)
-   || nonce  (u64, big-endian, 8 bytes)
-   || expiry (u64, big-endian, 8 bytes)
+   || contract_address_xdr  (ScVal::Address XDR, 40 bytes)
+   || signer                (32 bytes)
+   || merchant_address_xdr  (ScVal::Address XDR, 44 bytes)
+   || amount                (i128 big-endian, 16 bytes)
+   || nonce                 (u64 big-endian, 8 bytes)
+   || expiry                (u64 big-endian, 8 bytes)
 ```
 
-- `*_address_xdr` es el XDR del `ScVal` de la dirección (en Rust, `to_xdr`; en TypeScript, `new Address(...).toScVal().toXDR()`).
-- La firma es ed25519 sobre `msg` sin hash previo. En TypeScript sirve `Keypair.sign(msg)`; en el contrato, `env.crypto().ed25519_verify(...)`.
+- `*_address_xdr`: en Rust, `to_xdr(&env)`; en TypeScript, `Address.fromString(...).toScVal().toXDR()`.
+- Firma Ed25519 sin hash previo (`Keypair.sign(msg)` en TS; `env.crypto().ed25519_verify(...)` en Soroban).
 - Incluir la dirección del contrato evita que un vale se reutilice en otro despliegue.
-- Si el AI encuentra una forma más simple y robusta de serializar, puede cambiarla, **siempre que** exista un vector de prueba compartido (ver 4.7) que pase en ambos lenguajes.
 
 ### 4.5 Orden de validación en `redeem`
 
-1. El nonce no fue usado.
+1. El nonce no fue usado (`!has(Used(signer, nonce))`).
 2. `ledger.timestamp() <= voucher.expiry` y `voucher.expiry <= vault.expires_at`.
 3. `0 < amount <= vault.max_per_voucher`.
-4. La firma es válida para el mensaje canónico.
+4. Firma Ed25519 válida (`ed25519_verify`, que aborta/panic si falla).
 5. `vault.balance >= amount`.
-6. **Efectos primero:** marcar nonce usado y descontar saldo.
-7. Transferir del contrato al comercio.
-8. Emitir evento `redeemed` con signer, merchant, amount y nonce.
+6. **Efectos primero (CEI):** marcar nonce usado con TTL y descontar saldo.
+7. Transferir `amount` del contrato al comercio vía SAC.
+8. Emitir evento tipado `Redeemed` (`#[contractevent]`).
 
 ### 4.6 Almacenamiento y errores
 
-- `instance`: dirección del token.
-- `persistent`: `Vault(signer)` y `Used(signer, nonce)`. Extender el TTL al escribir, de modo que cubra al menos hasta `expires_at` más un margen.
-- Errores con `#[contracterror]` y códigos estables (`AlreadyRedeemed`, `VoucherExpired`, `InvalidAmount`, `InsufficientFunds`, `VaultNotFound`, `VaultStillActive`, `VaultExists`, etc.). La UI traduce cada código a un mensaje en español.
+- `instance`: `DataKey::Token`.
+- `persistent`: `DataKey::Vault(signer)` y `DataKey::Used(signer, nonce)` con extensión dinámica de TTL (`compute_ttl`: mínimo ~7 días y al menos `expires_at + ~1 día` limitado por `max_ttl`).
+- Errores estables `#1`–`#11` (`#[contracterror]`): `AlreadyRedeemed = 1`, `VoucherExpired = 2`, `InvalidAmount = 3`, `InsufficientFunds = 4`, `VaultNotFound = 5`, `VaultStillActive = 6`, `VaultExists = 7`, `InvalidSignature = 8`, `Unauthorized = 9`, `InvalidExpiry = 10`, `AlreadyInitialized = 11`. Mapeados a español desde una tabla compartida (`api/_errors.ts`).
 
-### 4.7 Pruebas obligatorias (`cargo test`)
+### 4.7 Pruebas obligatorias (`cargo test` y `pnpm test:app`)
 
-1. Flujo feliz: abrir bóveda, canjear, saldos correctos.
-2. Doble canje del mismo vale → falla.
-3. Firma inválida (mensaje alterado) → falla.
-4. Vale firmado por otra clave → falla.
-5. Vale vencido → falla.
-6. Comercio distinto al del vale → la firma no valida.
-7. Monto mayor al tope por vale → falla.
-8. Saldo insuficiente → falla y no altera estado.
-9. `close_vault` antes de `expires_at` → falla; después → devuelve el saldo.
-10. Vale de otro contrato (otra dirección de contrato en el mensaje) → falla.
-11. **Vector de prueba compartido:** un archivo `test-vectors/voucher.json` con entradas y firma esperada, usado por un test de Rust y por un script de TypeScript (`scripts/verify-vector.ts`).
+**Contrato Rust (21 pruebas en `contracts/pagoasegurao/src/test.rs`):**
+1–10. Flujo feliz, doble canje, firma alterada, otra clave, vale vencido, comercio distinto, monto mayor al tope, fondos insuficientes sin alterar estado, ciclo `close_vault`, vale de otro contrato.
+11. **Vector de prueba compartido (`test-vectors/voucher.json`):** leído directamente por Rust vía `include_str!` y verificado en TypeScript por `scripts/verify-vector.ts` y `app/src/lib/__tests__/pagoasegurao.test.ts`.
+12–21. Autorización en `close_vault` y `top_up`, expiración pasada al abrir, `voucher.expiry > vault.expires_at`, `max_per_voucher > amount`, monto cero en `open_vault`/`redeem`, `top_up` tras expiración o sobre bóveda inexistente y doble `initialize`.
+
+**App TypeScript (9 pruebas en `app/src/lib/__tests__/pagoasegurao.test.ts`):**
+- Aritmética exacta `BigInt` stroops (sin floats), tabla compartida `#1`–`#11`, `QR-A`/`QR-B`, verificación offline (incluyendo `voucher.expiry <= vault.expires_at`), exposición acumulada offline, urgencia en cola y vector compartido.
 
 ## 5. Formato de los QR
 
-Binario compacto, codificado en base64url, con prefijo de versión. Objetivo: menos de ~300 caracteres para que el QR se escanee rápido con poca luz.
+Binario compacto, codificado en base64url sin padding, con prefijo de versión (menor a 300 caracteres):
 
-- **QR-A (cobro):** `SSC1.` + base64url( merchant_pubkey[32] | amount_i64 | request_id[8] ).
-- **QR-B (vale):** `SSV1.` + base64url( signer[32] | merchant_pubkey[32] | amount_i64 | nonce_u64 | expiry_u64 | signature[64] ).
+- **QR-A (cobro, 48 bytes / ~69 chars):** `SSC1.` + base64url( `merchant_pubkey[32]` | `amount_u64[8]` | `request_id[8]` ).
+- **QR-B (vale, 152 bytes / ~208 chars):** `SSV1.` + base64url( `signer[32]` | `merchant_pubkey[32]` | `amount_u64[8]` | `nonce_u64[8]` | `expiry_u64[8]` | `signature[64]` ).
 
-El comercio debe validar en QR-B: firma correcta, `merchant` igual al suyo, `amount` igual al que cobró y vale aún no vencido por su propio reloj.
+`amount_u64` representa un entero positivo en stroops (`1..=i64::MAX`, 7 decimales) que se convierte a `i128` en el mensaje canónico y contrato. El comercio valida localmente en `QR-B`: firma Ed25519 correcta, `merchant` igual al suyo, `amount` igual al cobro activo (si hay `QR-A` activo), `expiry >= now` y `expiry <= vault.expires_at` (cuando la bóveda está en caché activa o consultada en vivo).
 
 ## 6. Aplicación (PWA, `app/`)
 
@@ -161,37 +176,36 @@ Una sola PWA con dos modos: **Cliente** y **Comercio**. Interfaz en español, pe
 
 ### 6.1 Requisitos transversales
 
-- Debe funcionar sin internet después de la primera carga (service worker con precache). Mostrar siempre un indicador "Sin conexión / En línea".
-- Almacenamiento local con `idb`: clave, saldo local, historial, cola de vales.
-- Lectura de QR con cámara que funcione en Safari de iOS y Chrome de Android. El AI elige la librería y verifica compatibilidad.
-- Requiere HTTPS para la cámara. Desplegar en un host con HTTPS (Vercel, Netlify o GitHub Pages).
+- Funciona sin internet tras la primera carga (`vite-plugin-pwa` / Workbox precache). Indicador sticky `En línea / Sin conexión` siempre visible.
+- Almacenamiento local con `idb` (IndexedDB v3): almacenes separados `keys`, `vault`, `client_vouchers`, `merchant_vouchers`, `vault_cache`.
+- Lectura de QR con cámara (`html5-qrcode`) más entrada manual/portapapeles de respaldo.
+- Desplegada sobre HTTPS en Vercel (`https://pagoasegurao.vercel.app`).
 
 ### 6.2 Modo Cliente
 
-1. Crear cuenta (se genera la clave localmente, se financia con Friendbot).
-2. Pedir fondos de prueba (endpoint `/api/faucet`).
-3. Abrir bóveda (monto, duración, tope por vale).
-4. Pagar: escanear QR-A → pantalla de confirmación → mostrar QR-B.
-5. Historial y saldo local restante.
-6. Cerrar bóveda cuando haya vencido.
+1. Crear cuenta local (clave Ed25519 en dispositivo).
+2. Activar cuenta y pedir fondos de prueba (`/api/faucet` + trustline `tPEN` de `S/ 200.00`).
+3. Abrir / recargar bóveda (`open_vault`, `top_up`).
+4. Pagar sin señal: escanear `QR-A` → confirmar → mostrar `QR-B` (validando colisión de nonce).
+5. Historial con estados (`Pendiente`, `Liquidado`, `Vencido`) reconciliados vía `is_redeemed` y reemisión de QR pendiente.
+6. Cerrar bóveda al vencer (`close_vault`) y recuperar saldo restante.
 
 ### 6.3 Modo Comercio
 
-1. Registrar cuenta de comercio con trustline al activo (asistido por el relayer o por el script de onboarding).
-2. Cobrar: ingresar monto → mostrar QR-A.
-3. Recibir: escanear QR-B → verificación local → "Pago recibido, pendiente de liquidar".
-4. Cola de vales con estados: pendiente, liquidado, rechazado (con motivo).
-5. Botón "Sincronizar" y sincronización automática al volver la conexión.
+1. Activar cuenta de comercio con trustline `tPEN` (Friendbot + `changeTrust`).
+2. Cobrar: ingresar monto (o chips `S/ 2`, `S/ 5`, `S/ 10`, `S/ 20`) → mostrar `QR-A` (persistido en `sessionStorage` al cambiar de pestaña).
+3. Recibir: escanear `QR-B` → verificación criptográfica y control acumulado offline → `"Pago recibido"`.
+4. Cola de vales ordenada por urgencia con etiqueta de tiempo restante, estados (`Pendiente`, `Confirmando en Stellar`, `Liquidado en Stellar`, `Rechazado` con reintento).
+5. Sincronización automática al abrir la app online, al volver la conexión y con botón manual.
 
 ## 7. Relayer (`api/`)
 
-Pequeño backend que paga las comisiones (esto es el *fee sponsorship* del proyecto).
+Backend serverless ESM en TypeScript (Vercel Functions) que patrocina comisiones (*fee sponsorship*):
 
-- `POST /api/redeem`: recibe un vale y su firma, simula la transacción, la envía con la cuenta del relayer como origen, devuelve el hash o un código de error mapeado.
-- `POST /api/faucet`: entrega tUSDC (activo de prueba, sin valor) a una cuenta (solo testnet, con límite de uso).
-- `GET /api/vault/:signer`: devuelve el estado de la bóveda para que el comercio lo consulte cuando está en línea.
-- La clave del relayer vive solo en variables de entorno (`RELAYER_SECRET`). Nunca en el repo.
-- Debe ser idempotente: reenviar el mismo vale no puede dar un error confuso al usuario.
+- `POST /api/redeem`: idempotencia vía `is_redeemed` (`HTTP 409`), valida trustline `tPEN` del comercio, simula y envía con reintentos RPC transitorios, traduce errores `#1`–`#11` usando `api/_errors.ts` y responde `HTTP 200` o `HTTP 202 PENDING` dentro del límite de 10 s de Vercel Hobby.
+- `POST /api/faucet`: fondea cuentas vía Friendbot y emite `S/ 200.00` (`200 tPEN` de prueba sin valor) con rate-limit en memoria por instancia (`cooldown` por cuenta + ráfaga IP).
+- `GET /api/vault/:signer`: simula `get_vault` (manejo seguro de `Option::None`) y devuelve balances de Horizon.
+- Las claves secretas (`RELAYER_SECRET`, `ISSUER_SECRET`) viven solo en variables de entorno; nunca en el repo.
 
 ## 8. Estructura del repositorio
 
@@ -202,21 +216,33 @@ pagoasegurao/
 ├─ README.md
 ├─ LICENSE                 (MIT)
 ├─ .gitignore
+├─ .vercelignore
 ├─ .env.example
-├─ Cargo.toml              (workspace de Rust)
+├─ Cargo.toml              (workspace Rust)
+├─ Cargo.lock
+├─ package.json
+├─ vercel.json
 ├─ contracts/
 │  └─ pagoasegurao/
 │     ├─ Cargo.toml
 │     ├─ src/lib.rs
 │     ├─ src/test.rs
 │     └─ test-vectors/voucher.json
+├─ api/                    (relayer serverless Vercel ESM)
+│  ├─ _errors.ts           (CONTRACT_ERROR_MAP compartido #1-#11)
+│  ├─ _config.ts
+│  ├─ faucet.ts
+│  ├─ redeem.ts
+│  └─ vault.ts
 ├─ app/                    (Vite + React + TS + PWA)
-│  ├─ src/lib/             (stellar.ts, voucher.ts, qr.ts, storage.ts)
-│  └─ src/screens/         (cliente y comercio)
-├─ api/                    (relayer serverless)
+│  ├─ vite.config.ts
+│  ├─ src/components/QRScanner.tsx
+│  ├─ src/lib/             (stellar.ts, voucher.ts, qr.ts, storage.ts, __tests__/pagoasegurao.test.ts)
+│  └─ src/screens/         (cliente.tsx, comercio.tsx)
 ├─ scripts/
 │  ├─ setup-testnet.ts
-│  └─ verify-vector.ts
+│  ├─ verify-vector.ts
+│  └─ test-e2e-api.ts
 ├─ deployments/
 │  └─ testnet.json         (IDs públicos; sin secretos)
 └─ docs/
@@ -228,70 +254,33 @@ pagoasegurao/
 
 ## 9. Fases
 
-Fechas pensadas desde el 22 de noviembre de 2026. Cada fase termina con commit y actualización de `docs/progress.md`.
+Entrega final de la Buildathon: **viernes 4 de diciembre de 2026** (meta interna: jueves 3).
 
-### Fase 0 — Preparación (22–23 nov)
-- Repo público con `CLAUDE.md`, `SPEC.md`, `LICENSE` (MIT), `.gitignore` (Node y Rust) y `README.md` mínimo.
-- Herramientas instaladas y verificadas (`rustc`, `stellar`, `node`, `pnpm`).
-- **Aceptación:** el repo es público y tiene al menos el commit inicial. Repo registrado en el Hub antes del miércoles 25 de noviembre, 11:59 p. m.
-
-### Fase 1 — Contrato y pruebas (23–25 nov)
-- Esqueleto con el CLI, estructuras, funciones y pruebas de la sección 4.
-- **Aceptación:** `cargo test` pasa con todas las pruebas de 4.7 (excepto el script de TypeScript); `cargo clippy` sin warnings.
-
-### Fase 2 — Testnet y vector compartido (25–26 nov)
-- `scripts/setup-testnet.ts` idempotente: crea emisor y activo de prueba, despliega el SAC y el contrato, fondea dos cuentas demo (cliente y comercio con trustline) y escribe `deployments/testnet.json`.
-- `scripts/verify-vector.ts` valida en TypeScript el mismo vector de prueba que Rust.
-- **Aceptación:** desde cero, el script deja todo listo; un `open_vault` y un `redeem` ejecutados por CLI o script se ven en stellar.expert (enlaces en `docs/progress.md`).
-
-### Fase 3 — App del cliente (26–29 nov)
-- PWA, almacenamiento local, creación de cuenta, faucet, abrir bóveda, pagar (QR-A → QR-B).
-- **Aceptación:** con el teléfono en modo avión (tras una primera carga con conexión) se genera un vale válido que el contrato acepta al canjearlo después.
-
-### Fase 4 — App del comercio y relayer (29 nov–1 dic)
-- Cobrar, recibir, verificar localmente, cola, sincronización y endpoints del relayer.
-- **Aceptación:** el flujo completo funciona de punta a punta en testnet con dos dispositivos.
-
-### Fase 5 — Casos de error y prueba real (1–2 dic)
-- Mensajes claros para vale vencido, doble canje, fondos insuficientes y comercio equivocado.
-- Despliegue público con HTTPS, instalación como PWA y prueba en dos celulares reales en modo avión.
-- **Aceptación:** la demo del guion (sección 11) sale limpia al menos tres veces seguidas.
-
-### Fase 6 — Entrega (2–3 dic)
-- README completo, diagrama de arquitectura, `docs/ai-usage.md`, video de máximo 3 minutos, enlace a la app desplegada.
-- **Aceptación:** checklist de la sección 10 completo. Entrega en APEX el jueves 3; el viernes 4 es solo colchón.
+- **Fases 0–5 (Preparación, Contrato, Testnet `tPEN`, PWA Cliente/Comercio, Relayer, E2E y PWA HTTPS):** **COMPLETADAS.**
+- **Fase 6 — Cierre y entrega (26 nov – 3 dic):**
+  - Validar demo física con 2 celulares reales en Modo Avión 3 veces seguidas en `https://pagoasegurao.vercel.app`.
+  - Completar usuario GitHub de Gustavo Alexander Flores Vera y enlace del video demo (máx. 3 min) en `README.md`.
+  - Confirmar registro en Build Hub / entrega final en APEX.
 
 ## 10. Checklist del README (exigido por las bases)
 
-- [ ] Resumen en inglés (3–4 líneas) y luego todo en español.
-- [ ] Problema que resuelve.
-- [ ] Solución y flujo (con diagrama).
-- [ ] Arquitectura: contrato, app, relayer.
-- [ ] Cómo ejecutarlo (paso a paso, desde cero).
-- [ ] **ID del contrato y direcciones en testnet**, con enlaces a stellar.expert.
-- [ ] Integrantes.
-- [ ] **Uso de IA y de código previo o de terceros** (qué partes, cómo se revisó).
-- [ ] Limitaciones conocidas (sección 3).
-- [ ] Enlaces: app desplegada, video demo.
-- [ ] Licencia MIT.
+- [x] Resumen en inglés (3–4 líneas) y luego todo en español.
+- [x] Problema que resuelve.
+- [x] Solución y flujo (con diagrama).
+- [x] Arquitectura: contrato, app, relayer.
+- [x] Cómo ejecutarlo (paso a paso, desde cero).
+- [x] **ID del contrato y direcciones en testnet**, con enlaces a stellar.expert.
+- [ ] Integrantes *(falta enlace GitHub de Gustavo Alexander Flores Vera)*.
+- [x] **Uso de IA y de código previo o de terceros** (qué partes, cómo se revisó).
+- [x] Limitaciones conocidas (sección 3).
+- [ ] Enlaces: app desplegada (`https://pagoasegurao.vercel.app` listo), video demo *(pendiente grabar y enlazar)*.
+- [x] Licencia MIT.
 
 ## 11. Guion del video demo (máximo 3 minutos)
 
-1. **0:00–0:25 Problema:** una escena real (feria, bus, zona sin señal) y por qué fallan los pagos digitales.
-2. **0:25–0:55 Idea y arquitectura:** diagrama simple de bóveda → vale offline → liquidación.
-3. **0:55–2:20 Demo en vivo:** cliente abre bóveda; ambos teléfonos a modo avión; comercio cobra; cliente paga; comercio ve "pago recibido"; se apaga el modo avión; se liquida; se muestra la transacción en stellar.expert.
-4. **2:20–2:50 Por qué Stellar:** Soroban, verificación de firmas, pagos en stablecoin (tUSDC en testnet, pensado para USDC), comisiones patrocinadas, finalidad en segundos.
+Ver guion detallado en `docs/demo-script.md`:
+1. **0:00–0:25 Problema:** feria/bus sin señal en Perú y por qué fallan billeteras tradicionales.
+2. **0:25–0:55 Idea y arquitectura:** bóveda en Soles (`tPEN`) → vale offline → liquidación patrocinada.
+3. **0:55–2:20 Demo en vivo:** dos celulares en Modo Avión (`QR-A` → `QR-B`), reconexión, liquidación automática y verificación en `stellar.expert`.
+4. **2:20–2:50 Por qué Stellar:** Soroban + `ed25519_verify`, SAC (`tPEN`, compatible con USDC), comisiones patrocinadas, finalidad ~5 s.
 5. **2:50–3:00 Límites y siguientes pasos.**
-
-## 12. Fuera de alcance (no implementar salvo que todo lo anterior funcione)
-
-- Mainnet, KYC, soles reales, conversión a efectivo.
-- Mejoras opcionales: llave de gasto separada protegida con passkey, reservas patrocinadas para la trustline del comercio, vales de varios comercios, panel de historial.
-
-## 13. Preguntas que la IA debe resolver verificando documentación actual
-
-- Versión actual de `soroban-sdk` y del `stellar` CLI, y el target de compilación a WASM que corresponde.
-- Si `__constructor` está disponible en la versión elegida.
-- Requisitos para que un SAC transfiera a una cuenta (trustline) y cómo manejar el error.
-- Flujo actual de simulación y preparación de transacciones con `@stellar/stellar-sdk`.
-- Mejor librería de escaneo de QR que funcione en iOS y Android.

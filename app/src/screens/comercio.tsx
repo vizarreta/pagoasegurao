@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import {
   TESTNET_CONFIG,
@@ -11,6 +11,7 @@ import {
   parseAmountToStroops,
   formatStroops,
   formatSoles,
+  checkVoucherRedeemedOnChain,
 } from '../lib/stellar';
 import {
   saveKeys,
@@ -25,8 +26,14 @@ import {
   VoucherRecord,
   CachedVaultRecord,
 } from '../lib/storage';
-import { encodeQRA, decodeQRB, verifyVoucherLocally, validateVoucherVaultExpiry } from '../lib/voucher';
-import { checkVoucherRedeemedOnChain } from '../lib/stellar';
+import {
+  encodeQRA,
+  decodeQRB,
+  verifyVoucherLocally,
+  validateVoucherVaultExpiry,
+  evaluateClientExposure,
+  getVoucherUrgency,
+} from '../lib/voucher';
 import { QRScanner } from '../components/QRScanner';
 import {
   Store,
@@ -52,8 +59,23 @@ interface StatusAlert {
 const PRESET_AMOUNTS = ['2.00', '5.00', '10.00', '20.00'];
 const ACTIVE_QRA_STORAGE_KEY = 'pagoasegurao_active_qra';
 
+function sortMerchantQueue(items: VoucherRecord[]): VoucherRecord[] {
+  return [...items].sort((a, b) => {
+    const aPending = a.status === 'pendiente' ? 0 : 1;
+    const bPending = b.status === 'pendiente' ? 0 : 1;
+    if (aPending !== bPending) return aPending - bPending;
+    if (aPending === 0) {
+      const expDiff = Number(a.expiry) - Number(b.expiry);
+      if (expDiff !== 0) return expDiff;
+    }
+    return b.createdAt - a.createdAt;
+  });
+}
+
 export default function ComercioScreen() {
   const [keyRecord, setKeyRecord] = useState<KeyRecord | null>(null);
+  const keyRecordRef = useRef<KeyRecord | null>(null);
+  const syncingRef = useRef<boolean>(false);
   const [balances, setBalances] = useState<AccountBalances | null>(null);
   const [activating, setActivating] = useState<boolean>(false);
 
@@ -75,6 +97,7 @@ export default function ComercioScreen() {
   const [syncing, setSyncing] = useState<boolean>(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [statusMsg, setStatusMsg] = useState<StatusAlert | null>(null);
+  const [nowSec, setNowSec] = useState<number>(() => Math.floor(Date.now() / 1000));
 
   const refreshMerchantBalances = useCallback(async (pubKey: string) => {
     try {
@@ -87,15 +110,17 @@ export default function ComercioScreen() {
 
   const syncPendingVouchers = useCallback(
     async (merchantPubKey?: string) => {
+      if (syncingRef.current) return;
       if (typeof navigator !== 'undefined' && !navigator.onLine) {
         setStatusMsg({ type: 'warning', text: 'Sin conexión. Los vales se liquidarán al recuperar señal.' });
         return;
       }
 
-      const freshQueue = (await getMerchantVouchers()).sort((a, b) => b.createdAt - a.createdAt);
+      const freshQueue = sortMerchantQueue(await getMerchantVouchers());
       const pendings = freshQueue.filter((v) => v.status === 'pendiente');
       if (pendings.length === 0) return;
 
+      syncingRef.current = true;
       setSyncing(true);
       setStatusMsg({
         type: 'info',
@@ -107,90 +132,94 @@ export default function ComercioScreen() {
       let rejectedCount = 0;
       let networkFailCount = 0;
 
-      for (const v of pendings) {
-        try {
-          const res = await fetch('/api/redeem', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              voucher: {
-                signer: v.signer,
-                merchant: v.merchant,
-                amount: v.amount,
-                nonce: v.nonce,
-                expiry: v.expiry,
-              },
-              signature: v.signature,
-            }),
-          });
+      try {
+        for (const v of pendings) {
+          try {
+            const res = await fetch('/api/redeem', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                voucher: {
+                  signer: v.signer,
+                  merchant: v.merchant,
+                  amount: v.amount,
+                  nonce: v.nonce,
+                  expiry: v.expiry,
+                },
+                signature: v.signature,
+              }),
+            });
 
-          const data = await res.json();
-          if (res.ok && data.ok && data.hash) {
-            if (data.status === 'PENDING' || res.status === 202) {
-              await updateMerchantVoucherStatus(v.id, 'pendiente', data.hash, undefined);
-              // Give ledger ~2.5s to confirm from browser without risking Vercel timeout
-              await new Promise((r) => setTimeout(r, 2500));
-              const confirmed = await checkVoucherRedeemedOnChain(v.signer, v.nonce);
-              if (confirmed === true) {
+            const data = await res.json();
+            if (res.ok && data.ok && data.hash) {
+              if (data.status === 'PENDING' || res.status === 202) {
+                await updateMerchantVoucherStatus(v.id, 'pendiente', data.hash, undefined);
+                // Give ledger ~2.5s to confirm from browser without risking Vercel timeout
+                await new Promise((r) => setTimeout(r, 2500));
+                const confirmed = await checkVoucherRedeemedOnChain(v.signer, v.nonce);
+                if (confirmed === true) {
+                  await updateMerchantVoucherStatus(v.id, 'liquidado', data.hash, undefined);
+                  settledCount++;
+                } else {
+                  pendingConfirmCount++;
+                }
+              } else {
                 await updateMerchantVoucherStatus(v.id, 'liquidado', data.hash, undefined);
                 settledCount++;
-              } else {
-                pendingConfirmCount++;
               }
-            } else {
-              await updateMerchantVoucherStatus(v.id, 'liquidado', data.hash, undefined);
+            } else if (data.alreadyRedeemed && v.txHash) {
+              // Previously sent via 202 PENDING and now confirmed on-chain
+              await updateMerchantVoucherStatus(v.id, 'liquidado', v.txHash, undefined);
               settledCount++;
-            }
-          } else if (data.alreadyRedeemed && v.txHash) {
-            // Previously sent via 202 PENDING and now confirmed on-chain
-            await updateMerchantVoucherStatus(v.id, 'liquidado', v.txHash, undefined);
-            settledCount++;
-          } else {
-            const errText = data.error || 'El contrato rechazó el vale.';
-            if (res.status >= 500) {
-              networkFailCount++;
             } else {
-              await updateMerchantVoucherStatus(v.id, 'rechazado', undefined, errText);
-              rejectedCount++;
+              const errText = data.error || 'El contrato rechazó el vale.';
+              if (res.status >= 500) {
+                networkFailCount++;
+              } else {
+                await updateMerchantVoucherStatus(v.id, 'rechazado', undefined, errText);
+                rejectedCount++;
+              }
             }
+          } catch {
+            networkFailCount++;
           }
-        } catch {
-          networkFailCount++;
         }
-      }
 
-      const updatedQueue = (await getMerchantVouchers()).sort((a, b) => b.createdAt - a.createdAt);
-      setQueue(updatedQueue);
+        const updatedQueue = sortMerchantQueue(await getMerchantVouchers());
+        setQueue(updatedQueue);
 
-      const pub = merchantPubKey || keyRecord?.publicKey;
-      if (pub) {
-        await refreshMerchantBalances(pub);
-      }
+        const pub = merchantPubKey || keyRecordRef.current?.publicKey;
+        if (pub) {
+          await refreshMerchantBalances(pub);
+        }
 
-      setSyncing(false);
-      if (settledCount > 0 && rejectedCount === 0 && networkFailCount === 0 && pendingConfirmCount === 0) {
-        setStatusMsg({
-          type: 'ok',
-          text: `¡${settledCount} vale(s) liquidado(s) en Stellar Testnet! Revisa tu saldo en Soles y el enlace al explorador.`,
-        });
-      } else if (pendingConfirmCount > 0) {
-        setStatusMsg({
-          type: 'info',
-          text: `${settledCount} liquidado(s) y ${pendingConfirmCount} enviado(s) esperando confirmación final en Stellar Testnet.`,
-        });
-      } else if (rejectedCount > 0) {
-        setStatusMsg({
-          type: 'warning',
-          text: `Sincronización terminada: ${settledCount} liquidado(s), ${rejectedCount} rechazado(s). Revisa el motivo en la cola.`,
-        });
-      } else if (networkFailCount > 0) {
-        setStatusMsg({
-          type: 'warning',
-          text: 'No se pudo conectar con el relayer. Tus vales siguen seguros en la cola local.',
-        });
+        if (settledCount > 0 && rejectedCount === 0 && networkFailCount === 0 && pendingConfirmCount === 0) {
+          setStatusMsg({
+            type: 'ok',
+            text: `¡${settledCount} vale(s) liquidado(s) en Stellar Testnet! Revisa tu saldo en Soles y el enlace al explorador.`,
+          });
+        } else if (pendingConfirmCount > 0) {
+          setStatusMsg({
+            type: 'info',
+            text: `${settledCount} liquidado(s) y ${pendingConfirmCount} enviado(s) esperando confirmación final en Stellar Testnet.`,
+          });
+        } else if (rejectedCount > 0) {
+          setStatusMsg({
+            type: 'warning',
+            text: `Sincronización terminada: ${settledCount} liquidado(s), ${rejectedCount} rechazado(s). Revisa el motivo en la cola.`,
+          });
+        } else if (networkFailCount > 0) {
+          setStatusMsg({
+            type: 'warning',
+            text: 'No se pudo conectar con el relayer. Tus vales siguen seguros en la cola local.',
+          });
+        }
+      } finally {
+        syncingRef.current = false;
+        setSyncing(false);
       }
     },
-    [keyRecord?.publicKey, refreshMerchantBalances]
+    [refreshMerchantBalances]
   );
 
   useEffect(() => {
@@ -205,6 +234,7 @@ export default function ComercioScreen() {
           };
           await saveKeys('merchant', savedKey);
         }
+        keyRecordRef.current = savedKey;
         setKeyRecord(savedKey);
 
         try {
@@ -220,18 +250,29 @@ export default function ComercioScreen() {
           // Ignore invalid sessionStorage entry
         }
 
-        const allVouchers = (await getMerchantVouchers()).sort((a, b) => b.createdAt - a.createdAt);
+        const allVouchers = sortMerchantQueue(await getMerchantVouchers());
         setQueue(allVouchers);
 
         if (typeof navigator === 'undefined' || navigator.onLine) {
           await refreshMerchantBalances(savedKey.publicKey);
+          if (allVouchers.some((v) => v.status === 'pendiente')) {
+            await syncPendingVouchers(savedKey.publicKey);
+          }
         }
       } catch (e) {
         console.error('Error loading merchant', e);
       }
     }
     loadComercio();
-  }, [refreshMerchantBalances]);
+  }, [refreshMerchantBalances, syncPendingVouchers]);
+
+  useEffect(() => {
+    if (!queue.some((v) => v.status === 'pendiente')) return;
+    const timer = setInterval(() => {
+      setNowSec(Math.floor(Date.now() / 1000));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [queue]);
 
   useEffect(() => {
     const handleOnline = () => {
@@ -367,9 +408,9 @@ export default function ComercioScreen() {
     }
 
     // Only enforce cached expiry if live or still active (an expired cache could predate a new vault offline)
-    const nowSec = Math.floor(Date.now() / 1000);
+    const currentNowSec = Math.floor(Date.now() / 1000);
     const enforceableVaultExpiry =
-      vaultInfo && (fetchedLiveVault || vaultInfo.expiresAt >= nowSec)
+      vaultInfo && (fetchedLiveVault || vaultInfo.expiresAt >= currentNowSec)
         ? BigInt(vaultInfo.expiresAt)
         : undefined;
     const vaultExpiryCheck = validateVoucherVaultExpiry(payload.expiry, enforceableVaultExpiry);
@@ -381,10 +422,15 @@ export default function ComercioScreen() {
       return;
     }
 
-    let highRiskWarning: string | undefined;
-    if (vaultInfo && BigInt(vaultInfo.balance) < payload.amount) {
-      highRiskWarning = `Advertencia: según la última sincronización, la bóveda tenía ${formatSoles(vaultInfo.balance)} (menor al vale).`;
-    }
+    const existingQueue = await getMerchantVouchers();
+    const { exceedingWarning: highRiskWarning } = evaluateClientExposure(
+      payload.signerAddress,
+      payload.amount,
+      existingQueue,
+      vaultInfo,
+      fetchedLiveVault,
+      currentNowSec
+    );
 
     const hexSig = Array.from(payload.signature)
       .map((b) => b.toString(16).padStart(2, '0'))
@@ -403,7 +449,7 @@ export default function ComercioScreen() {
     };
 
     await saveMerchantVoucher(newVoucher);
-    const updatedQueue = (await getMerchantVouchers()).sort((a, b) => b.createdAt - a.createdAt);
+    const updatedQueue = sortMerchantQueue(await getMerchantVouchers());
     setQueue(updatedQueue);
 
     setLastReceived({
@@ -430,16 +476,16 @@ export default function ComercioScreen() {
 
   const handleRetryVoucher = async (id: string) => {
     await updateMerchantVoucherStatus(id, 'pendiente', undefined, undefined);
-    const updated = (await getMerchantVouchers()).sort((a, b) => b.createdAt - a.createdAt);
+    const updated = sortMerchantQueue(await getMerchantVouchers());
     setQueue(updated);
     if (keyRecord) {
       await syncPendingVouchers(keyRecord.publicKey);
     }
   };
 
-  const totalPendiente = queue
-    .filter((v) => v.status === 'pendiente')
-    .reduce((acc, v) => acc + BigInt(v.amount), 0n);
+  const pendingQueue = queue.filter((v) => v.status === 'pendiente');
+  const totalPendiente = pendingQueue.reduce((acc, v) => acc + BigInt(v.amount), 0n);
+  const nextPendingUrgency = pendingQueue.length > 0 ? getVoucherUrgency(pendingQueue[0].expiry, nowSec) : null;
 
   return (
     <div className="comercio-container">
@@ -684,57 +730,70 @@ export default function ComercioScreen() {
               <h4>Cola de Vales ({queue.length})</h4>
             </div>
 
+            {pendingQueue.length > 0 && nextPendingUrgency && (
+              <div className="urgency-banner">
+                {pendingQueue.length} vale(s) por liquidar · el más próximo:{' '}
+                <strong>{nextPendingUrgency.label}</strong>
+              </div>
+            )}
+
             {queue.length === 0 ? (
               <p className="subtext text-center">Aún no has recibido vales.</p>
             ) : (
               <ul className="queue-list">
-                {queue.map((v) => (
-                  <li key={v.id} className="queue-item queue-item-col">
-                    <div className="queue-item-top">
-                      <div className="queue-item-info">
-                        <span className="item-amount">+ {formatSoles(v.amount)}</span>
-                        <span className="item-client">
-                          De: {v.signer.slice(0, 6)}...{v.signer.slice(-4)} ·{' '}
-                          {new Date(v.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                        </span>
+                {queue.map((v) => {
+                  const urgency = v.status === 'pendiente' ? getVoucherUrgency(v.expiry, nowSec) : null;
+                  return (
+                    <li key={v.id} className="queue-item queue-item-col">
+                      <div className="queue-item-top">
+                        <div className="queue-item-info">
+                          <span className="item-amount">+ {formatSoles(v.amount)}</span>
+                          <span className="item-client">
+                            De: {v.signer.slice(0, 6)}...{v.signer.slice(-4)} ·{' '}
+                            {new Date(v.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          </span>
+                          {urgency && (
+                            <span className={`urgency-badge urgency-${urgency.level}`}>{urgency.label}</span>
+                          )}
+                        </div>
+
+                        <div className="queue-item-status">
+                          <span className={`status-badge status-${v.status}`}>
+                            {v.status === 'pendiente' &&
+                              (v.txHash ? 'Confirmando en Stellar' : 'Pendiente de liquidar')}
+                            {v.status === 'liquidado' && 'Liquidado en Stellar'}
+                            {v.status === 'rechazado' && 'Rechazado'}
+                          </span>
+                          {v.txHash && (
+                            <a
+                              href={`${TESTNET_CONFIG.explorerBase}/tx/${v.txHash}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="link-explorer"
+                              title="Ver transacción en stellar.expert"
+                            >
+                              <ExternalLink size={13} /> Ver tx
+                            </a>
+                          )}
+                        </div>
                       </div>
 
-                      <div className="queue-item-status">
-                        <span className={`status-badge status-${v.status}`}>
-                          {v.status === 'pendiente' &&
-                            (v.txHash ? 'Confirmando en Stellar' : 'Pendiente de liquidar')}
-                          {v.status === 'liquidado' && 'Liquidado en Stellar'}
-                          {v.status === 'rechazado' && 'Rechazado'}
-                        </span>
-                        {v.txHash && (
-                          <a
-                            href={`${TESTNET_CONFIG.explorerBase}/tx/${v.txHash}`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="link-explorer"
-                            title="Ver transacción en stellar.expert"
+                      {v.status === 'rechazado' && v.error && (
+                        <div className="voucher-error-row">
+                          <span className="voucher-error-text">{v.error}</span>
+                          <button
+                            type="button"
+                            className="btn-chip"
+                            onClick={() => handleRetryVoucher(v.id)}
+                            disabled={syncing}
                           >
-                            <ExternalLink size={13} /> Ver tx
-                          </a>
-                        )}
-                      </div>
-                    </div>
-
-                    {v.status === 'rechazado' && v.error && (
-                      <div className="voucher-error-row">
-                        <span className="voucher-error-text">{v.error}</span>
-                        <button
-                          type="button"
-                          className="btn-chip"
-                          onClick={() => handleRetryVoucher(v.id)}
-                          disabled={syncing}
-                        >
-                          Reintentar
-                        </button>
-                      </div>
-                    )}
-                  </li>
-                ))}
+                            Reintentar
+                          </button>
+                        </div>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
             )}
           </div>
