@@ -32,8 +32,10 @@ export const QRScanner: React.FC<QRScannerProps> = ({
           { facingMode: 'environment' },
           {
             fps: 10,
-            qrbox: { width: 250, height: 250 },
-            aspectRatio: 1.0,
+            qrbox: (viewfinderWidth, viewfinderHeight) => {
+              const edge = Math.max(180, Math.floor(Math.min(viewfinderWidth, viewfinderHeight) * 0.72));
+              return { width: edge, height: edge };
+            },
           },
           (decodedText) => {
             if (expectedPrefix && !decodedText.startsWith(expectedPrefix)) {
@@ -106,7 +108,12 @@ export const QRScanner: React.FC<QRScannerProps> = ({
           <h3>
             <Camera size={20} className="inline-icon" /> {title}
           </h3>
-          <button className="btn-icon" onClick={() => { stopScanner(); onClose(); }}>
+          <button
+            className="btn-icon"
+            type="button"
+            aria-label="Cerrar escáner"
+            onClick={() => { stopScanner(); onClose(); }}
+          >
             <X size={20} />
           </button>
         </div>

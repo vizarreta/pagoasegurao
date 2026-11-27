@@ -49,6 +49,7 @@ import {
   Check,
   ShieldAlert,
   Sparkles,
+  X,
 } from 'lucide-react';
 
 interface StatusAlert {
@@ -492,12 +493,22 @@ export default function ComercioScreen() {
       {/* Status alert banner */}
       {statusMsg && (
         <div className={`alert alert-${statusMsg.type}`}>
-          <div className="alert-body">
-            {statusMsg.type === 'ok' && <CheckCircle size={18} className="inline-icon" />}
-            {statusMsg.type === 'error' && <AlertCircle size={18} className="inline-icon" />}
-            {statusMsg.type === 'warning' && <AlertCircle size={18} className="inline-icon" />}
-            {statusMsg.type === 'info' && <RefreshCw size={18} className="inline-icon spin" />}
-            <span>{statusMsg.text}</span>
+          <div className="alert-top-row">
+            <div className="alert-body">
+              {statusMsg.type === 'ok' && <CheckCircle size={18} className="inline-icon" />}
+              {statusMsg.type === 'error' && <AlertCircle size={18} className="inline-icon" />}
+              {statusMsg.type === 'warning' && <AlertCircle size={18} className="inline-icon" />}
+              {statusMsg.type === 'info' && <RefreshCw size={18} className="inline-icon spin" />}
+              <span>{statusMsg.text}</span>
+            </div>
+            <button
+              type="button"
+              className="alert-close"
+              aria-label="Cerrar aviso"
+              onClick={() => setStatusMsg(null)}
+            >
+              <X size={16} />
+            </button>
           </div>
         </div>
       )}
@@ -616,6 +627,56 @@ export default function ComercioScreen() {
             </div>
           )}
 
+          {/* QR-A Display (shown above form so it fits immediately on screen) */}
+          {generatedQRA && (
+            <div className="card qra-card">
+              <div className="card-header">
+                <h3>QR de Cobro (QR-A)</h3>
+                <p>Pide al cliente que escanee este código (funciona sin internet):</p>
+                <h2 className="charge-amount">
+                  {expectedChargeUnits ? formatSoles(expectedChargeUnits) : `S/ ${amountInput}`}
+                </h2>
+              </div>
+
+              <div className="qr-wrapper">
+                <QRCodeSVG value={generatedQRA} size={220} level="L" marginSize={2} />
+              </div>
+
+              <div className="qra-actions">
+                <button
+                  type="button"
+                  className="btn btn-primary btn-block"
+                  onClick={() => setScanningQRB(true)}
+                >
+                  <Camera size={18} /> Escanear Vale del Cliente (QR-B)
+                </button>
+                <div className="btn-group">
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-block"
+                    onClick={() => handleCopy(generatedQRA, 'qra-code')}
+                  >
+                    {copiedId === 'qra-code' ? <Check size={16} /> : <Copy size={16} />}
+                    {copiedId === 'qra-code' ? 'Copiado' : 'Copiar QR-A'}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={() => {
+                      setGeneratedQRA(null);
+                      setExpectedChargeUnits(null);
+                      try {
+                        sessionStorage.removeItem(ACTIVE_QRA_STORAGE_KEY);
+                      } catch {}
+                    }}
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Charge Form */}
           <div className="card">
             <div className="card-header">
@@ -665,53 +726,6 @@ export default function ComercioScreen() {
               </div>
             </form>
           </div>
-
-          {/* QR-A Display */}
-          {generatedQRA && (
-            <div className="card qra-card">
-              <div className="card-header">
-                <h3>QR de Cobro (QR-A)</h3>
-                <p>Pide al cliente que escanee este código (funciona sin internet):</p>
-                <h2 className="charge-amount">
-                  {expectedChargeUnits ? formatSoles(expectedChargeUnits) : `S/ ${amountInput}`}
-                </h2>
-              </div>
-
-              <div className="qr-wrapper">
-                <QRCodeSVG value={generatedQRA} size={220} level="M" />
-              </div>
-
-              <div className="btn-group">
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  onClick={() => handleCopy(generatedQRA, 'qra-code')}
-                >
-                  {copiedId === 'qra-code' ? <Check size={16} /> : <Copy size={16} />}
-                  {copiedId === 'qra-code' ? 'Copiado' : 'Copiar QR-A'}
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-ghost"
-                  onClick={() => {
-                    setGeneratedQRA(null);
-                    setExpectedChargeUnits(null);
-                    try {
-                      sessionStorage.removeItem(ACTIVE_QRA_STORAGE_KEY);
-                    } catch {}
-                  }}
-                >
-                  Cancelar
-                </button>
-                <button
-                  className="btn btn-primary btn-block"
-                  onClick={() => setScanningQRB(true)}
-                >
-                  <Camera size={18} /> Escanear Vale (QR-B)
-                </button>
-              </div>
-            </div>
-          )}
 
           {/* Scanner Modal for QR-B */}
           {scanningQRB && (

@@ -48,7 +48,10 @@ import {
   Check,
   ExternalLink,
   PlusCircle,
+  X,
 } from 'lucide-react';
+
+const CLIENT_VAULT_PRESETS = ['20', '50', '100', '200'];
 
 interface StatusAlert {
   type: 'ok' | 'error' | 'info' | 'warning';
@@ -569,12 +572,22 @@ export default function ClienteScreen() {
       {/* Status alert banner */}
       {statusMsg && (
         <div className={`alert alert-${statusMsg.type}`}>
-          <div className="alert-body">
-            {statusMsg.type === 'ok' && <CheckCircle size={18} className="inline-icon" />}
-            {statusMsg.type === 'error' && <AlertCircle size={18} className="inline-icon" />}
-            {statusMsg.type === 'warning' && <AlertCircle size={18} className="inline-icon" />}
-            {statusMsg.type === 'info' && <RefreshCw size={18} className="inline-icon spin" />}
-            <span>{statusMsg.text}</span>
+          <div className="alert-top-row">
+            <div className="alert-body">
+              {statusMsg.type === 'ok' && <CheckCircle size={18} className="inline-icon" />}
+              {statusMsg.type === 'error' && <AlertCircle size={18} className="inline-icon" />}
+              {statusMsg.type === 'warning' && <AlertCircle size={18} className="inline-icon" />}
+              {statusMsg.type === 'info' && <RefreshCw size={18} className="inline-icon spin" />}
+              <span>{statusMsg.text}</span>
+            </div>
+            <button
+              type="button"
+              className="alert-close"
+              aria-label="Cerrar aviso"
+              onClick={() => setStatusMsg(null)}
+            >
+              <X size={16} />
+            </button>
           </div>
           {statusMsg.txHash && (
             <a
@@ -774,10 +787,10 @@ export default function ClienteScreen() {
             <div className="card">
               <div className="card-header">
                 <Lock size={20} className="inline-icon" />
-                <h3>Apartar Soles en Bóveda (`open_vault`)</h3>
+                <h3>Apartar Soles en Bóveda</h3>
                 <p>
-                  Bloquea tus Soles de prueba (tPEN) en el contrato Soroban antes de quedarte sin señal. El pago queda
-                  asegurado hasta el monto apartado.
+                  Bloquea tus Soles de prueba (tPEN) antes de quedarte sin señal. Tu pago queda asegurado hasta el monto
+                  apartado.
                 </p>
               </div>
 
@@ -792,6 +805,18 @@ export default function ClienteScreen() {
                     className="input-text"
                     required
                   />
+                  <div className="preset-chips">
+                    {CLIENT_VAULT_PRESETS.map((preset) => (
+                      <button
+                        key={preset}
+                        type="button"
+                        className={`preset-chip ${vaultAmount === preset ? 'active' : ''}`}
+                        onClick={() => setVaultAmount(preset)}
+                      >
+                        S/ {preset}
+                      </button>
+                    ))}
+                  </div>
                 </div>
 
                 <div className="form-group">
@@ -820,6 +845,12 @@ export default function ClienteScreen() {
                     <option value="604800">7 días</option>
                   </select>
                 </div>
+
+                {walletBalanceStroops <= 0n && (
+                  <p className="subtext helper-warn">
+                    Primero presiona <strong>"Activar y pedir S/ 200"</strong> arriba con internet.
+                  </p>
+                )}
 
                 <button
                   type="submit"
@@ -865,40 +896,50 @@ export default function ClienteScreen() {
             </div>
           )}
 
-          {/* Show Signed QR-B Card */}
+          {/* Show Signed QR-B Modal */}
           {step === 'show_qrb' && generatedQRB && (
-            <div className="card qrb-card">
-              <div className="card-header">
-                <CheckCircle size={28} className="icon-success" />
-                <h3>¡Vale Firmado sin Señal!</h3>
-                <p>Muestra este código QR-B al comercio para completar tu compra:</p>
-              </div>
+            <div className="scanner-modal">
+              <div className="scanner-content qrb-modal-card">
+                <div className="qrb-modal-header">
+                  <span className="badge">
+                    <CheckCircle size={14} /> ¡Vale Firmado sin Señal!
+                  </span>
+                  <button
+                    type="button"
+                    className="btn-icon"
+                    aria-label="Cerrar código QR"
+                    onClick={() => setStep('boveda')}
+                  >
+                    <X size={20} />
+                  </button>
+                </div>
 
-              <div className="qr-wrapper">
-                <QRCodeSVG value={generatedQRB} size={240} level="M" />
-              </div>
+                <p className="subtext mb-0">Muestra este QR al comercio para completar tu compra:</p>
 
-              <div className="qrb-details">
-                <p>
-                  <strong>Monto:</strong> {lastPaidAmount} <small>(tPEN)</small>
-                </p>
-                <p className="voucher-code" title={generatedQRB}>
-                  {generatedQRB.slice(0, 32)}...
-                </p>
-              </div>
+                <div className="qr-wrapper">
+                  <QRCodeSVG value={generatedQRB} size={230} level="L" marginSize={2} />
+                </div>
 
-              <div className="btn-group mt-10">
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  onClick={() => handleCopy(generatedQRB, 'qrb-code')}
-                >
-                  {copiedId === 'qrb-code' ? <Check size={16} /> : <Copy size={16} />}
-                  {copiedId === 'qrb-code' ? 'Copiado' : 'Copiar código QR-B'}
-                </button>
-                <button className="btn btn-primary" onClick={() => setStep('boveda')}>
-                  Listo
-                </button>
+                <div className="qrb-details">
+                  <h2 className="charge-amount">{lastPaidAmount}</h2>
+                  <p className="voucher-code" title={generatedQRB}>
+                    {generatedQRB.slice(0, 32)}...
+                  </p>
+                </div>
+
+                <div className="btn-group mt-10">
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => handleCopy(generatedQRB, 'qrb-code')}
+                  >
+                    {copiedId === 'qrb-code' ? <Check size={16} /> : <Copy size={16} />}
+                    {copiedId === 'qrb-code' ? 'Copiado' : 'Copiar QR-B'}
+                  </button>
+                  <button type="button" className="btn btn-primary btn-block" onClick={() => setStep('boveda')}>
+                    Listo
+                  </button>
+                </div>
               </div>
             </div>
           )}

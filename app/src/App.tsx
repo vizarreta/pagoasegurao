@@ -5,9 +5,24 @@ import { TESTNET_CONFIG } from './lib/stellar';
 import { Wifi, WifiOff, User, Store, Shield, ExternalLink } from 'lucide-react';
 import './App.css';
 
+const ROLE_STORAGE_KEY = 'pagoasegurao_active_role';
+
 export default function App() {
-  const [mode, setMode] = useState<'cliente' | 'comercio'>('cliente');
+  const [mode, setMode] = useState<'cliente' | 'comercio'>(() => {
+    try {
+      const saved = localStorage.getItem(ROLE_STORAGE_KEY);
+      if (saved === 'cliente' || saved === 'comercio') return saved;
+    } catch {}
+    return 'cliente';
+  });
   const [online, setOnline] = useState<boolean>(typeof navigator !== 'undefined' ? navigator.onLine : true);
+
+  const handleSelectMode = (nextMode: 'cliente' | 'comercio') => {
+    setMode(nextMode);
+    try {
+      localStorage.setItem(ROLE_STORAGE_KEY, nextMode);
+    } catch {}
+  };
 
   useEffect(() => {
     const handleOnline = () => setOnline(true);
@@ -54,7 +69,7 @@ export default function App() {
       <nav className="role-nav">
         <button
           className={`nav-btn ${mode === 'cliente' ? 'active' : ''}`}
-          onClick={() => setMode('cliente')}
+          onClick={() => handleSelectMode('cliente')}
         >
           <User size={18} />
           <span>Cliente (Pagar)</span>
@@ -62,7 +77,7 @@ export default function App() {
 
         <button
           className={`nav-btn ${mode === 'comercio' ? 'active' : ''}`}
-          onClick={() => setMode('comercio')}
+          onClick={() => handleSelectMode('comercio')}
         >
           <Store size={18} />
           <span>Comercio (Cobrar)</span>
