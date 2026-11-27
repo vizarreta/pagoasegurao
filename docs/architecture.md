@@ -3,7 +3,7 @@
 ## Componentes
 
 ### 1. Contrato Soroban (`contracts/pagoasegurao`)
-- Compilado con `soroban-sdk 29.0.1` y `stellar-cli 30.0.1` al target `wasm32v1-none` (8,910 bytes optimizados).
+- Compilado con `soroban-sdk 29.0.1` al target `wasm32v1-none` (`26,933 bytes` en `cargo build --release`).
 - Activo de prueba `tPEN` (Soles de prueba `S/`, sin valor económico) emitido en Stellar Testnet y envuelto con su Stellar Asset Contract (SAC); su dirección se guarda en almacenamiento de instancia al llamar `initialize(token)`.
 - Almacenamiento persistente con extensión dinámica de TTL (`expires_at + ~1 día`):
   - `Vault(signer)`: `owner`, `balance`, `expires_at`, `max_per_voucher`.
@@ -14,13 +14,13 @@
   `"PAGOASEGURAO1" || contract_address_xdr || signer(32B) || merchant_address_xdr || amount(i128 BE) || nonce(u64 BE) || expiry(u64 BE)`.
 
 ### 2. App PWA (`app/`)
-- Vite 5 + React 18 + TypeScript estricto + `vite-plugin-pwa` (Workbox precaching de 16 recursos) + `@stellar/stellar-sdk 17.4.0`.
+- Vite 5 + React 18 + TypeScript estricto + `vite-plugin-pwa` (Workbox precaching de 20 recursos) + `@stellar/stellar-sdk 17.4.0`.
 - Dos modos: **Cliente** y **Comercio**. Interfaz en español y en **Soles (`S/` · `tPEN`)**, pensada para teléfono.
 - `src/polyfills.ts`: polyfill de `Buffer` para Safari iOS y Chrome Android.
 - `src/lib/`:
   - `stellar.ts`: configuración pública del contrato, serialización canónica, firma/verificación Ed25519, aritmética decimal exacta con `BigInt` stroops (`formatSoles`), y llamadas reales a Testnet (`changeTrust`, `open_vault`, `top_up`, `close_vault`, consultas Horizon y relayer).
   - `voucher.ts` y `qr.ts`: codificación compacta base64url de `QR-A` (`SSC1.`, 69 chars) y `QR-B` (`SSV1.`, 208 chars) y verificación local sin conexión.
-  - `storage.ts`: IndexedDB v3 (`idb`) con almacenes separados (`keys`, `vault`, `client_vouchers`, `merchant_vouchers`, `vault_cache`).
+  - `storage.ts`: IndexedDB v4 (`idb`) con almacenes separados (`keys`, `vault`, `client_vouchers`, `merchant_vouchers`, `vault_cache`).
   - `src/screens/`: `cliente.tsx` (reconciliación on-chain `is_redeemed` + liberación de retenciones vencidas y estado de vales) y `comercio.tsx` (cola IndexedDB y persistencia de cobro activo).
 - `src/components/QRScanner.tsx`: escaneo por cámara con `html5-qrcode` + entrada manual/portapapeles.
 
@@ -45,7 +45,7 @@
 - RPC: `https://soroban-testnet.stellar.org` (Protocol 30)
 - Horizon: `https://horizon-testnet.stellar.org`
 - Explorador: `https://stellar.expert/explorer/testnet`
-- Contrato `PagoAsegurao`: `CAWJ3NQHILVST2RHVNSIOSQFRJXXZY7KSBEZZXWGMBOHZ7OVQKQ6GQPT`
-- Token `tPEN` (SAC): `CDUBDTM5Z3Y3OKKQ5BIKEP4XHW2WTHS6AUB4N2LMN6TOZQDAL2WPX5HF`
+- Contrato `PagoAsegurao`: `CDM5ZV7D2WSFK2D452KOB26FSURACWVCM4E7ZSWWBAC6LQ7DU6YHQR4J`
+- Token `tPEN` (SAC): `CDSWIWMX6CCOAGJSLEYFKTNN2BPWI3OKF3CFGZQBOSTAJ2FIGJHFDLWK`
 - App HTTPS: https://pagoasegurao.vercel.app
 - Solo testnet. Nunca mainnet.

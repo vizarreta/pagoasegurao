@@ -177,7 +177,7 @@ Una sola PWA con dos modos: **Cliente** y **Comercio**. Interfaz en español, pe
 ### 6.1 Requisitos transversales
 
 - Funciona sin internet tras la primera carga (`vite-plugin-pwa` / Workbox precache). Indicador sticky `En línea / Sin conexión` siempre visible.
-- Almacenamiento local con `idb` (IndexedDB v3): almacenes separados `keys`, `vault`, `client_vouchers`, `merchant_vouchers`, `vault_cache`.
+- Almacenamiento local con `idb` (IndexedDB v4): almacenes separados `keys`, `vault`, `client_vouchers`, `merchant_vouchers`, `vault_cache`.
 - Lectura de QR con cámara (`html5-qrcode`) más entrada manual/portapapeles de respaldo.
 - Desplegada sobre HTTPS en Vercel (`https://pagoasegurao.vercel.app`).
 

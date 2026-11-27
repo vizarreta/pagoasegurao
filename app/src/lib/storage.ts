@@ -69,7 +69,7 @@ interface PagoAseguraoDB extends DBSchema {
 }
 
 const DB_NAME = 'pagoasegurao';
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 
 let dbPromise: Promise<IDBPDatabase<PagoAseguraoDB>> | null = null;
 
@@ -84,8 +84,8 @@ export async function getDb(): Promise<IDBPDatabase<PagoAseguraoDB>> {
         if (!db.objectStoreNames.contains('merchant_vouchers')) db.createObjectStore('merchant_vouchers');
         if (!db.objectStoreNames.contains('vault_cache')) db.createObjectStore('vault_cache');
 
-        // Migrating from v1/v2 (tUSDC) to v3 (tPEN Soles contract): clear old contract vaults & queues
-        if (oldVersion > 0 && oldVersion < 3) {
+        // Migrating from earlier contract deployments to v4 (CDM5ZV...): clear stale vaults & voucher queues
+        if (oldVersion > 0 && oldVersion < 4) {
           tx.objectStore('vault').clear();
           tx.objectStore('client_vouchers').clear();
           tx.objectStore('merchant_vouchers').clear();

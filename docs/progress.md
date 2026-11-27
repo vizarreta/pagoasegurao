@@ -11,20 +11,18 @@
   - Bóvedas (`open_vault`, `top_up`, `close_vault`, `get_vault`, `get_token`), vales (`redeem`, `is_redeemed`), autorización de dueño (`Error::Unauthorized = 9`), validación de expiración (`Error::InvalidExpiry = 10`), validación `max_per_voucher <= amount`, `Error::AlreadyInitialized = 11`, TTL dinámico y eventos `#[contractevent]`.
 - **Validación:** `cargo test --offline` (**21/21 pasando**, vector compartido leído directamente desde `test-vectors/voucher.json`), `cargo clippy --offline -- -D warnings` (**0 warnings**), `cargo fmt --check` limpio, `pnpm test:app` (**9/9 pasando**), `pnpm verify:vector` OK, `pnpm build` OK.
 
-> **Nota sobre re-despliegue de contrato:** Los ajustes locales en `lib.rs` (`max_per_voucher <= amount` y `AlreadyInitialized = 11`) ya compilan y pasan todas las pruebas. El contrato ya desplegado en `CAWJ3NQHILVST2RHVNSIOSQFRJXXZY7KSBEZZXWGMBOHZ7OVQKQ6GQPT` continúa funcionando en Testnet/Vercel (la UI ya valida `max_per_voucher <= amount`); si se desea reflejar estos dos checks en un nuevo contrato on-chain, ejecutar `pnpm setup:testnet` con las variables de Vercel actualizadas.
-
 ### Fase 2 — Testnet (`tPEN` Soles de prueba) y Vector Compartido: COMPLETADA
 - `@stellar/stellar-sdk 17.4.0` (Protocol 30) y vector compartido Rust/TS verificado (`161` bytes canónicos).
-- Despliegue real en **Soles de prueba (`S/` · `tPEN`, sin valor económico)**:
-  - Emisor `tPEN`: `GDX4ZNACYNYJFY2QK6P7BKSF5UTDUYFY6J5VLRHMEN2H76KSN6N3AWYL`
-  - Relayer (fee sponsor): `GDTAPYWCT4VCDKAQ7NUI6E5NQ6DYXDX5AV7OUF7ACQ6JO575ZMRPKBQV`
-  - SAC `tPEN`: `CDUBDTM5Z3Y3OKKQ5BIKEP4XHW2WTHS6AUB4N2LMN6TOZQDAL2WPX5HF` ([ver en stellar.expert](https://stellar.expert/explorer/testnet/contract/CDUBDTM5Z3Y3OKKQ5BIKEP4XHW2WTHS6AUB4N2LMN6TOZQDAL2WPX5HF))
-  - Contrato `PagoAsegurao`: `CAWJ3NQHILVST2RHVNSIOSQFRJXXZY7KSBEZZXWGMBOHZ7OVQKQ6GQPT` ([ver en stellar.expert](https://stellar.expert/explorer/testnet/contract/CAWJ3NQHILVST2RHVNSIOSQFRJXXZY7KSBEZZXWGMBOHZ7OVQKQ6GQPT))
-  - Tx `open_vault` (`S/ 100.00`): [ver tx](https://stellar.expert/explorer/testnet/tx/ee1d9083c752161fcc13dbd15cb995cb47eabf15eac7784f3c6dff680cf467d4)
-  - Tx `redeem` patrocinado (`S/ 15.00`): [ver tx](https://stellar.expert/explorer/testnet/tx/2e8378d144d770566ec719f6dadb534130b169028beb50d521e07710007542cd)
+- Despliegue real del contrato actualizado (`26,933 bytes`, incluyendo `max_per_voucher <= amount` y `Error::AlreadyInitialized = 11`) en **Soles de prueba (`S/` · `tPEN`, sin valor económico)**:
+  - Emisor `tPEN`: `GD623ITJWCKKW273MPHDQPL7AAKKLS7COUSGRXDSP7UWTIOPEMQL3GIV`
+  - Relayer (fee sponsor): `GCNR7PQ3X7ELNJWAYTRD5BFZ7C77Y2YAQ3NRAO7UBPG7ESXGOHJL7UGG`
+  - SAC `tPEN`: `CDSWIWMX6CCOAGJSLEYFKTNN2BPWI3OKF3CFGZQBOSTAJ2FIGJHFDLWK` ([ver en stellar.expert](https://stellar.expert/explorer/testnet/contract/CDSWIWMX6CCOAGJSLEYFKTNN2BPWI3OKF3CFGZQBOSTAJ2FIGJHFDLWK))
+  - Contrato `PagoAsegurao`: `CDM5ZV7D2WSFK2D452KOB26FSURACWVCM4E7ZSWWBAC6LQ7DU6YHQR4J` ([ver en stellar.expert](https://stellar.expert/explorer/testnet/contract/CDM5ZV7D2WSFK2D452KOB26FSURACWVCM4E7ZSWWBAC6LQ7DU6YHQR4J))
+  - Tx `open_vault` (`S/ 100.00`): [ver tx](https://stellar.expert/explorer/testnet/tx/1528a34b2dc1d9270c3e13092245f74df808c64c0eb26c6ab220d4438cb42741)
+  - Tx `redeem` patrocinado (`S/ 15.00`): [ver tx](https://stellar.expert/explorer/testnet/tx/f1c0b8727fb33d488de89d2c629027a42f8c62c8c158ecc342ac65f5be880762)
 
 ### Fase 3 y 4 — PWA en Soles (`S/`) y Relayer Real: COMPLETADA
-- Relayer serverless ESM nativo (`api/`) y PWA offline-first (`app/`) operando 100% en Soles de prueba (`S/` · `tPEN`), con montos rápidos (`S/ 2`, `S/ 5`, `S/ 10`, `S/ 20`), faucet `S/ 200.00`, IndexedDB v3 con migración automática y precaching de 16 recursos.
+- Relayer serverless ESM nativo (`api/`) y PWA offline-first (`app/`) operando 100% en Soles de prueba (`S/` · `tPEN`), con montos rápidos (`S/ 2`, `S/ 5`, `S/ 10`, `S/ 20`), faucet `S/ 200.00`, IndexedDB v4 con migración automática y precaching de 20 recursos.
 - Despliegue público HTTPS en Vercel: https://pagoasegurao.vercel.app
 
 ### Fase 5 — Casos de Error y Prueba E2E en Soles (`tPEN`): COMPLETADA

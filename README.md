@@ -57,14 +57,12 @@ Todos los contratos y transacciones están desplegados y verificables en **Stell
 
 | Recurso | ID / Hash | Explorador (`stellar.expert`) |
 |---|---|---|
-| **Contrato `PagoAsegurao` (`tPEN`)** | `CAWJ3NQHILVST2RHVNSIOSQFRJXXZY7KSBEZZXWGMBOHZ7OVQKQ6GQPT` | [Ver contrato](https://stellar.expert/explorer/testnet/contract/CAWJ3NQHILVST2RHVNSIOSQFRJXXZY7KSBEZZXWGMBOHZ7OVQKQ6GQPT) |
-| **Token `tPEN` — Soles de prueba (SAC)** | `CDUBDTM5Z3Y3OKKQ5BIKEP4XHW2WTHS6AUB4N2LMN6TOZQDAL2WPX5HF` | [Ver token SAC](https://stellar.expert/explorer/testnet/contract/CDUBDTM5Z3Y3OKKQ5BIKEP4XHW2WTHS6AUB4N2LMN6TOZQDAL2WPX5HF) |
-| **Emisor `tPEN`** | `GDX4ZNACYNYJFY2QK6P7BKSF5UTDUYFY6J5VLRHMEN2H76KSN6N3AWYL` | [Ver cuenta](https://stellar.expert/explorer/testnet/account/GDX4ZNACYNYJFY2QK6P7BKSF5UTDUYFY6J5VLRHMEN2H76KSN6N3AWYL) |
-| **Relayer (Fee Sponsor)** | `GDTAPYWCT4VCDKAQ7NUI6E5NQ6DYXDX5AV7OUF7ACQ6JO575ZMRPKBQV` | [Ver cuenta](https://stellar.expert/explorer/testnet/account/GDTAPYWCT4VCDKAQ7NUI6E5NQ6DYXDX5AV7OUF7ACQ6JO575ZMRPKBQV) |
-| **Tx `open_vault` (`S/ 100.00`)** | `ee1d9083...80cf467d4` | [Ver transacción](https://stellar.expert/explorer/testnet/tx/ee1d9083c752161fcc13dbd15cb995cb47eabf15eac7784f3c6dff680cf467d4) |
-| **Tx `redeem` patrocinado (`S/ 15.00`)** | `ff023a02...a706fb246c` | [Ver transacción](https://stellar.expert/explorer/testnet/tx/ff023a023b1249f0366e7cdf64ccc1cfb38decd09e16adff276b49a706fb246c) |
-| **Tx `top_up` (`+S/ 15.00`)** | `8dc131b6...5aa0af92d3f` | [Ver transacción](https://stellar.expert/explorer/testnet/tx/8dc131b6ca2ea733c3957b2dd4894262bcee4cfc6c083a87903b95aa0af92d3f) |
-| **Tx `close_vault` (`+S/ 80.00` devueltos)** | `50970ded...13d4a414994` | [Ver transacción](https://stellar.expert/explorer/testnet/tx/50970ded5929099665d9ed22646c166e953cd3d132de6b2161b7913d4a414994) |
+| **Contrato `PagoAsegurao` (`tPEN`)** | `CDM5ZV7D2WSFK2D452KOB26FSURACWVCM4E7ZSWWBAC6LQ7DU6YHQR4J` | [Ver contrato](https://stellar.expert/explorer/testnet/contract/CDM5ZV7D2WSFK2D452KOB26FSURACWVCM4E7ZSWWBAC6LQ7DU6YHQR4J) |
+| **Token `tPEN` — Soles de prueba (SAC)** | `CDSWIWMX6CCOAGJSLEYFKTNN2BPWI3OKF3CFGZQBOSTAJ2FIGJHFDLWK` | [Ver token SAC](https://stellar.expert/explorer/testnet/contract/CDSWIWMX6CCOAGJSLEYFKTNN2BPWI3OKF3CFGZQBOSTAJ2FIGJHFDLWK) |
+| **Emisor `tPEN`** | `GD623ITJWCKKW273MPHDQPL7AAKKLS7COUSGRXDSP7UWTIOPEMQL3GIV` | [Ver cuenta](https://stellar.expert/explorer/testnet/account/GD623ITJWCKKW273MPHDQPL7AAKKLS7COUSGRXDSP7UWTIOPEMQL3GIV) |
+| **Relayer (Fee Sponsor)** | `GCNR7PQ3X7ELNJWAYTRD5BFZ7C77Y2YAQ3NRAO7UBPG7ESXGOHJL7UGG` | [Ver cuenta](https://stellar.expert/explorer/testnet/account/GCNR7PQ3X7ELNJWAYTRD5BFZ7C77Y2YAQ3NRAO7UBPG7ESXGOHJL7UGG) |
+| **Tx `open_vault` (`S/ 100.00`)** | `1528a34b...38cb42741` | [Ver transacción](https://stellar.expert/explorer/testnet/tx/1528a34b2dc1d9270c3e13092245f74df808c64c0eb26c6ab220d4438cb42741) |
+| **Tx `redeem` patrocinado (`S/ 15.00`)** | `f1c0b872...5be880762` | [Ver transacción](https://stellar.expert/explorer/testnet/tx/f1c0b8727fb33d488de89d2c629027a42f8c62c8c158ecc342ac65f5be880762) |
 
 Todos los IDs públicos y hashes también están registrados en [`deployments/testnet.json`](deployments/testnet.json).
 
@@ -74,7 +72,7 @@ Todos los IDs públicos y hashes también están registrados en [`deployments/te
 
 Ver detalle completo en [`docs/architecture.md`](docs/architecture.md).
 
-1. **Contrato Inteligente Soroban (`contracts/pagoasegurao`)** — Rust + `soroban-sdk 29.0.1`, compilado con `stellar contract build` al target `wasm32v1-none` (8,910 bytes optimizados):
+1. **Contrato Inteligente Soroban (`contracts/pagoasegurao`)** — Rust + `soroban-sdk 29.0.1`, compilado al target `wasm32v1-none` (`26,933 bytes` en `cargo build --release`):
    - `initialize(token)` / `get_token()`: registra y consulta el SAC de `tPEN`.
    - `open_vault(owner, signer, amount, expires_at, max_per_voucher)`: bloquea `tPEN` del cliente en la bóveda y extiende el TTL dinámicamente más allá de `expires_at`.
    - `top_up(owner, signer, amount)`: permite al dueño original incrementar el saldo mientras la bóveda esté vigente.
@@ -83,9 +81,9 @@ Ver detalle completo en [`docs/architecture.md`](docs/architecture.md).
    - `get_vault(signer)` y `is_redeemed(signer, nonce)`: lectura del estado on-chain.
    - Códigos de error estables (`#1`–`#11`) traducidos a español claro desde una tabla compartida (`api/_errors.ts`) en relayer y UI.
 
-2. **Aplicación Móvil PWA (`app/`)** — React 18, TypeScript estricto, Vite 5, `vite-plugin-pwa` (Workbox precaching de 16 archivos) y `@stellar/stellar-sdk 17.4.0`:
+2. **Aplicación Móvil PWA (`app/`)** — React 18, TypeScript estricto, Vite 5, `vite-plugin-pwa` (Workbox precaching de 20 recursos) y `@stellar/stellar-sdk 17.4.0`:
    - Dos modos en una sola PWA: **Cliente (Pagar)** y **Comercio (Cobrar)**, íntegramente en **Soles (`S/` · `tPEN`)**.
-   - Almacenamiento local en IndexedDB v3 (`idb`) con almacenes separados (`client_vouchers`, `merchant_vouchers`, `vault_cache`, `keys`, `vault`).
+   - Almacenamiento local en IndexedDB v4 (`idb`) con almacenes separados (`client_vouchers`, `merchant_vouchers`, `vault_cache`, `keys`, `vault`).
    - Montos en enteros de 7 decimales (`BigInt` stroops, sin floats).
    - Escáner QR con cámara (`html5-qrcode`) compatible con iOS Safari y Android Chrome, más fallback manual/portapapeles.
    - Sincronización automática al volver la conexión (`window.addEventListener('online')`).
@@ -199,7 +197,7 @@ Valida en vivo: onboarding cliente y comercio (`/api/faucet` + trustline `tPEN`)
 
 - **App desplegada (HTTPS / PWA en producción):** https://pagoasegurao.vercel.app
 - **Repositorio público:** https://github.com/vizarreta/pagoasegurao
-- **Contrato en Stellar Testnet:** https://stellar.expert/explorer/testnet/contract/CAWJ3NQHILVST2RHVNSIOSQFRJXXZY7KSBEZZXWGMBOHZ7OVQKQ6GQPT
+- **Contrato en Stellar Testnet:** https://stellar.expert/explorer/testnet/contract/CDM5ZV7D2WSFK2D452KOB26FSURACWVCM4E7ZSWWBAC6LQ7DU6YHQR4J
 - **Video demo (máx. 3 min):** *(pendiente de grabar — guion listo en [`docs/demo-script.md`](docs/demo-script.md))*
 
 ---

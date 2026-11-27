@@ -18,7 +18,7 @@ Este documento cumple la regla 9 de `CLAUDE.md` y el requisito de transparencia 
 - **Relayer serverless (`api/` y `vercel.json`)**:
   - Implementación real contra Stellar Testnet de `/api/redeem`, `/api/faucet` y `/api/vault/:signer` con patrocinio de comisiones, idempotencia y traducción de errores a español.
 - **PWA Frontend (`app/src/`)**:
-  - Pantallas Cliente y Comercio conectadas a Stellar Testnet, polyfill de `Buffer`, aritmética exacta en `BigInt` stroops, IndexedDB v3 separado por rol, reconciliación `is_redeemed`, auto-sincronización y control acumulado offline en comercio, `QRScanner`, generación de QR compactos, íconos PWA y 9 pruebas unitarias TypeScript (`app/src/lib/__tests__/pagoasegurao.test.ts`).
+  - Pantallas Cliente y Comercio conectadas a Stellar Testnet, polyfill de `Buffer`, aritmética exacta en `BigInt` stroops, IndexedDB v4 separado por rol, reconciliación `is_redeemed`, auto-sincronización y control acumulado offline en comercio, `QRScanner`, generación de QR compactos, íconos PWA y 9 pruebas unitarias TypeScript (`app/src/lib/__tests__/pagoasegurao.test.ts`).
 
 ## Partes elaboradas, auditadas y validadas por el equipo
 
