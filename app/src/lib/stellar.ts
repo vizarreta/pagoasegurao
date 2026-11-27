@@ -12,7 +12,7 @@ import {
   nativeToScVal,
   scValToNative,
 } from '@stellar/stellar-sdk';
-import testnetDeployment from '../../public/deployments/testnet.json';
+import testnetDeployment from '../../../deployments/testnet.json';
 import { CONTRACT_ERROR_MAP } from '../../../api/_errors';
 
 // Fallback configuration matching public testnet deployment (never secrets)

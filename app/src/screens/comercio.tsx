@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useState, useCallback, useRef, lazy, Suspense } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import {
   TESTNET_CONFIG,
@@ -34,7 +34,9 @@ import {
   evaluateClientExposure,
   getVoucherUrgency,
 } from '../lib/voucher';
-import { QRScanner } from '../components/QRScanner';
+const QRScanner = lazy(() =>
+  import('../components/QRScanner').then((m) => ({ default: m.QRScanner }))
+);
 import {
   Store,
   QrCode,
@@ -729,12 +731,14 @@ export default function ComercioScreen() {
 
           {/* Scanner Modal for QR-B */}
           {scanningQRB && (
-            <QRScanner
-              title="Escanear Vale del Cliente (QR-B)"
-              expectedPrefix="SSV1."
-              onScan={handleScanQRBResult}
-              onClose={() => setScanningQRB(false)}
-            />
+            <Suspense fallback={<div className="scanner-modal"><div className="scanner-content text-center subtext">Abriendo cámara...</div></div>}>
+              <QRScanner
+                title="Escanear Vale del Cliente (QR-B)"
+                expectedPrefix="SSV1."
+                onScan={handleScanQRBResult}
+                onClose={() => setScanningQRB(false)}
+              />
+            </Suspense>
           )}
 
           {/* Voucher Queue */}

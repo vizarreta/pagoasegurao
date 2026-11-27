@@ -1,9 +1,10 @@
-import { useState, useEffect } from 'react';
-import ClienteScreen from './screens/cliente';
-import ComercioScreen from './screens/comercio';
+import { useState, useEffect, lazy, Suspense } from 'react';
 import { TESTNET_CONFIG } from './lib/stellar';
 import { Wifi, WifiOff, User, Store, Shield, ExternalLink } from 'lucide-react';
 import './App.css';
+
+const ClienteScreen = lazy(() => import('./screens/cliente'));
+const ComercioScreen = lazy(() => import('./screens/comercio'));
 
 const ROLE_STORAGE_KEY = 'pagoasegurao_active_role';
 
@@ -86,7 +87,9 @@ export default function App() {
 
       {/* Main View */}
       <main className="app-main">
-        {mode === 'cliente' ? <ClienteScreen /> : <ComercioScreen />}
+        <Suspense fallback={<div className="card text-center subtext">Cargando...</div>}>
+          {mode === 'cliente' ? <ClienteScreen /> : <ComercioScreen />}
+        </Suspense>
       </main>
 
       {/* Footer */}

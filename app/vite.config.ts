@@ -156,6 +156,15 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     sourcemap: false,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          stellar: ['@stellar/stellar-sdk'],
+          qr: ['html5-qrcode', 'qrcode.react'],
+          vendor: ['react', 'react-dom', 'idb', 'lucide-react', 'buffer'],
+        },
+      },
+    },
   },
   server: {
     port: 5173,

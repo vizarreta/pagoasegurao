@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, lazy, Suspense } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import {
   TESTNET_CONFIG,
@@ -31,7 +31,9 @@ import {
 } from '../lib/storage';
 import { generateNonce } from '../lib/qr';
 import { decodeQRA, encodeQRB, QRAPayload } from '../lib/voucher';
-import { QRScanner } from '../components/QRScanner';
+const QRScanner = lazy(() =>
+  import('../components/QRScanner').then((m) => ({ default: m.QRScanner }))
+);
 import {
   Wallet,
   ShieldCheck,
@@ -946,12 +948,14 @@ export default function ClienteScreen() {
 
           {/* Scanner Modal for QR-A */}
           {scanningQRA && (
-            <QRScanner
-              title="Escanear QR de Cobro (QR-A)"
-              expectedPrefix="SSC1."
-              onScan={handleScanQRAResult}
-              onClose={() => setScanningQRA(false)}
-            />
+            <Suspense fallback={<div className="scanner-modal"><div className="scanner-content text-center subtext">Abriendo cámara...</div></div>}>
+              <QRScanner
+                title="Escanear QR de Cobro (QR-A)"
+                expectedPrefix="SSC1."
+                onScan={handleScanQRAResult}
+                onClose={() => setScanningQRA(false)}
+              />
+            </Suspense>
           )}
 
           {/* Client Voucher History */}
